@@ -41,6 +41,13 @@ class DbcheckSkillCommand extends Command
     protected $dirNames = ['skills', 'skill'];
 
     /**
+     * 内置默认候选目录（始终作为候选项，且交互时默认选中第一个）。
+     *
+     * @var array<int, string>
+     */
+    protected $defaultDirs = ['.agent/skills'];
+
+    /**
      * 排除的目录。
      *
      * @var array<int, string>
@@ -61,7 +68,7 @@ class DbcheckSkillCommand extends Command
         }
 
         $given = array_values(array_filter(array_map('strval', (array) $this->option('dir'))));
-        $dirs = count($given) > 0 ? $given : $this->detectDirs();
+        $dirs = count($given) > 0 ? $given : $this->candidateDirs();
 
         if ($this->option('list')) {
             return $this->showList($dirs);
@@ -69,7 +76,7 @@ class DbcheckSkillCommand extends Command
 
         if (empty($dirs)) {
             $this->warn('未检测到项目已有的 agent skill 目录');
-            $answer = (string) $this->ask('请输入要注册到的 skill 目录路径', '.codebuddy/skills');
+            $answer = (string) $this->ask('请输入要注册到的 skill 目录路径', $this->defaultDirs[0]);
             if ($answer === '') {
                 $this->line('已取消');
 
@@ -114,6 +121,19 @@ class DbcheckSkillCommand extends Command
      *
      * @return array<int, string> 相对项目根的路径
      */
+    /**
+     * 最终候选目录：内置默认目录在前，其后为探测到的目录（去重后排序）。
+     *
+     * @return array<int, string> 相对项目根的路径
+     */
+    protected function candidateDirs(): array
+    {
+        $dirs = array_merge($this->defaultDirs, $this->detectDirs());
+        $dirs = array_values(array_unique($dirs));
+
+        return $dirs;
+    }
+
     protected function detectDirs(): array
     {
         $root = rtrim(base_path(), '/\\');
@@ -195,9 +215,10 @@ class DbcheckSkillCommand extends Command
             return self::SUCCESS;
         }
 
-        $this->line('检测到的 agent skill 目录:');
+        $this->line('agent skill 目录候选:');
         foreach ($dirs as $i => $d) {
-            $this->line('  ' . ($i + 1) . '. ' . $d);
+            $mark = in_array($d, $this->defaultDirs, true) ? ' [默认]' : '';
+            $this->line('  ' . ($i + 1) . '. ' . $d . $mark);
         }
 
         return self::SUCCESS;
@@ -220,7 +241,11 @@ class DbcheckSkillCommand extends Command
         }
 
         $options = array_merge($dirs, ['全部目录', '自定义路径']);
-        $picked = (string) $this->choice('请选择要注册到的 agent skill 目录', $options, 0);
+        $defaultIndex = (int) array_search($this->defaultDirs[0], $options, true);
+        if ($defaultIndex === false || $defaultIndex < 0) {
+            $defaultIndex = 0;
+        }
+        $picked = (string) $this->choice('请选择要注册到的 agent skill 目录', $options, $defaultIndex);
 
         if ($picked === '自定义路径') {
             $answer = (string) $this->ask('请输入 skill 目录路径');
