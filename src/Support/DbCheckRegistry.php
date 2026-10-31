@@ -2,10 +2,9 @@
 
 namespace Dongasai\Dbcheck\Support;
 
+use Dongasai\Dbcheck\Checks\AbstractTableCheck;
 use Dongasai\Dbcheck\Checks\AbstractTableDataCheck;
-use Dongasai\Dbcheck\Checks\AbstractTableExistsCheck;
 use Dongasai\Dbcheck\Checks\AbstractTableFieldCheck;
-use Dongasai\Dbcheck\Checks\AbstractTableRowCheck;
 use Dongasai\Dbcheck\Contracts\DbCheckInterface;
 use LogicException;
 
@@ -123,17 +122,16 @@ class DbCheckRegistry
     }
 
     /**
-     * 按继承的抽象基类分成四类（存在 → 行差异 → 固定数据 → 字段明细）。
+     * 按继承的抽象基类分成三类（表结构 → 固定数据 → 字段明细）。
      *
      * @param string|null $group 只统计该分组的检查器；null 且 $all=false 时只统计「常规」（未分组）检查器
      * @param bool $all true 时不按分组过滤（含分组与常规）
-     * @return array{exist: array, row: array, data: array, field: array}
+     * @return array{table: array, data: array, field: array}
      */
     public static function grouped(?string $group = null, bool $all = false): array
     {
         $groups = [
-            'exist' => [],
-            'row' => [],
+            'table' => [],
             'data' => [],
             'field' => [],
         ];
@@ -145,10 +143,8 @@ class DbCheckRegistry
 
             $ref = new \ReflectionClass($c);
 
-            if ($ref->isSubclassOf(AbstractTableRowCheck::class)) {
-                $groups['row'][] = $c;
-            } elseif ($ref->isSubclassOf(AbstractTableExistsCheck::class)) {
-                $groups['exist'][] = $c;
+            if ($ref->isSubclassOf(AbstractTableCheck::class)) {
+                $groups['table'][] = $c;
             } elseif ($ref->isSubclassOf(AbstractTableDataCheck::class)) {
                 $groups['data'][] = $c;
             } elseif ($ref->isSubclassOf(AbstractTableFieldCheck::class)) {

@@ -2,42 +2,23 @@
 
 namespace Dongasai\Dbcheck\Adapters;
 
-use Illuminate\Support\Facades\Config;
-use Illuminate\Support\Facades\DB;
-
 /**
- * 适配器工厂：按连接选择驱动适配器。
+ * 适配器工厂：按连接返回驱动适配器的稳定入口。
  *
- * 优先级：
- *  1. config('dbcheck.adapters.<连接名>') 显式覆盖（默认连接键为 'default'）；
- *  2. 按 Laravel 驱动自动选择：
- *     - mysql / mariadb → Mysql8Adapter（现代默认，json 原生类型）
- *     - pgsql / postgres → PgsqlAdapter
+ * 数据库类型判断与选择逻辑（显式参数 > 运行期覆盖 > 自动探测）由 DbDriver 实现，
+ * 本类仅保持检查器调用面稳定，可传 $override 显式指定适配器（类名或驱动别名）。
  */
 class AdapterFactory
 {
     /**
+     * 按连接选择驱动适配器。
+     *
+     * @param string|null $connection 连接名（null = 默认连接）
+     * @param string|null $override 适配器类名或驱动别名，非空时直接采用（显式参数覆盖）
      * @return DatabaseAdapter
      */
-    public static function make(?string $connection): DatabaseAdapter
+    public static function make(?string $connection, ?string $override = null): DatabaseAdapter
     {
-        $key = $connection ?? 'default';
-        $override = Config::get('dbcheck.adapters.' . $key);
-
-        if (is_string($override) && class_exists($override)) {
-            return new $override();
-        }
-
-        $driver = DB::connection($connection)->getDriverName();
-
-        switch ($driver) {
-            case 'pgsql':
-            case 'postgres':
-                return new PgsqlAdapter();
-            case 'mysql':
-            case 'mariadb':
-            default:
-                return new Mysql8Adapter();
-        }
+        return DbDriver::adapter($connection, $override);
     }
 }

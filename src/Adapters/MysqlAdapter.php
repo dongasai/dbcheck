@@ -109,6 +109,8 @@ class MysqlAdapter extends DatabaseAdapter
                 return $table->dateTime($name);
             case ColumnType::DECIMAL:
                 return $table->decimal($name, (int) ($def['precision'] ?? 10), (int) ($def['scale'] ?? 0));
+            case ColumnType::ENUM:
+                return $table->enum($name, array_map('strval', (array) ($def['values'] ?? [])));
             default:
                 throw new \InvalidArgumentException('未知的列类型声明: ' . $type);
         }
@@ -196,6 +198,14 @@ class MysqlAdapter extends DatabaseAdapter
                 return 'datetime';
             case ColumnType::DECIMAL:
                 return 'decimal(' . ((int) ($def['precision'] ?? 10)) . ',' . ((int) ($def['scale'] ?? 0)) . ')';
+            case ColumnType::ENUM:
+                // 与 information_schema.COLUMN_TYPE 的枚举串同口径：enum('a','b')
+                return 'enum(' . implode(',', array_map(
+                    static function (string $v): string {
+                        return "'" . str_replace("'", "''", $v) . "'";
+                    },
+                    array_map('strval', (array) ($def['values'] ?? []))
+                )) . ')';
             default:
                 throw new \InvalidArgumentException('未知的列类型声明: ' . $type);
         }
@@ -224,5 +234,30 @@ class MysqlAdapter extends DatabaseAdapter
         unset($m);
 
         return $map;
+    }
+
+    /**
+     * 读取实际表级字符集与排序规则（information_schema.TABLES + COLLATIONS）。
+     *
+     * @return array{charset: string, collation: string}|null 表不存在时返回 null
+     */
+    public function actualTableCharset(?string $connection, string $table): ?array
+    {
+        $row = DB::connection($connection)->selectOne(
+            'SELECT t.TABLE_COLLATION AS collation, c.CHARACTER_SET_NAME AS charset'
+            . ' FROM information_schema.TABLES t'
+            . ' LEFT JOIN information_schema.COLLATIONS c ON c.COLLATION_NAME = t.TABLE_COLLATION'
+            . ' WHERE t.TABLE_SCHEMA = ? AND t.TABLE_NAME = ?',
+            [$this->schemaName($connection), $table]
+        );
+
+        if ($row === null || $row->collation === null) {
+            return null;
+        }
+
+        return [
+            'charset' => (string) ($row->charset ?? ''),
+            'collation' => (string) $row->collation,
+        ];
     }
 }

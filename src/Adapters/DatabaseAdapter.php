@@ -110,6 +110,19 @@ abstract class DatabaseAdapter
     }
 
     /**
+     * 读取实际表级字符集与排序规则。
+     *
+     * 默认不支持（返回 null = 不比对，仅当检查器显式声明了表编码才会触发读取）；
+     * MySQL 系驱动覆写实现。
+     *
+     * @return array{charset: string, collation: string}|null 表不存在或驱动不支持时返回 null
+     */
+    public function actualTableCharset(?string $connection, string $table): ?array
+    {
+        return null;
+    }
+
+    /**
      * 解析索引创建时使用的名字。
      *
      * MySQL：原样返回。

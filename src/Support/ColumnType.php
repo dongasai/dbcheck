@@ -60,6 +60,11 @@ class ColumnType
     public const DECIMAL = 'decimal';
 
     /**
+     * 枚举：取值列表放 'values' 键，如 ['private', 'public']。
+     */
+    public const ENUM = 'enum';
+
+    /**
      * 默认类型（列声明未给 type 时回落）。
      */
     public const DEFAULT = self::STRING;
@@ -93,6 +98,7 @@ class ColumnType
             self::TIMESTAMP,
             self::DATETIME,
             self::DECIMAL,
+            self::ENUM,
         ];
     }
 }

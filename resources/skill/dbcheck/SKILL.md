@@ -1,6 +1,6 @@
 ---
 name: dbcheck
-description: dbcheck 数据库自检框架——按表编写四类检查类（存在 / 行差异 / 固定数据 / 字段明细），并驱动修复。
+description: dbcheck 数据库自检框架——按表编写三类检查类（表结构 / 固定数据 / 字段明细），并驱动修复。
 ---
 
 # dbcheck 检查类编写指南
@@ -13,34 +13,41 @@ description: dbcheck 数据库自检框架——按表编写四类检查类（�
    落声明后必须用 `dbcheck:check --no-interaction` 复验到全绿。
 4. **按需建类**，不建空检查类。
 
-## 四类检查
+## 三类检查
 
 | 类型 | 基类 | 检查 | 修复 |
 |------|------|------|------|
-| 存在 | `AbstractTableExistsCheck` | 表是否存在 | 按最终结构建表 |
-| 行差异 | `AbstractTableRowCheck` | 列 / 索引与最终结构是否一致 | 补列、改列、补/重建索引 |
+| 表结构 | `AbstractTableCheck` | 表不存在 → 报缺失；存在 → 表编码（声明了才比）与列/索引和最终结构比对 | 缺失按声明建表；编码不一致 `CONVERT TO`；补列、改列、补/重建索引 |
 | 固定数据 | `AbstractTableDataCheck` | 必需数据行是否存在 | 插行 |
 | 字段明细 | `AbstractTableFieldCheck` | 声明字段的值 / JSON 数组项是否齐全 | 回写标量、补数组项 |
 
-`RowCheck` 同时是 `TableSchemaProvider`，是该表最终结构的**唯一声明处**；`ExistsCheck` 通过 `schema()` 指向它，避免两处维护同一张表的定义。
+`TableCheck` 同时是 `TableSchemaProvider`，是该表最终结构的**唯一声明处**：不存在创建，存在比对差异并修复——一张表一个检查器。
 
 ## 命名规则
 
-表名转 StudlyCase 后加类型后缀（`ExistsCheck` / `RowCheck` / `DataCheck` / `FieldCheck`）。
+表名转 StudlyCase 后加类型后缀（`TableCheck` / `DataCheck` / `FieldCheck`）。
 
-库前缀**不参与类名**（先去掉前缀再 StudlyCase），例如 `hy26_meetings` → `MeetingsRowCheck` 而非 `Hy26MeetingsRowCheck`。
+库前缀**不参与类名**（先去掉前缀再 StudlyCase），例如 `hy26_meetings` → `MeetingsTableCheck` 而非 `Hy26MeetingsTableCheck`。
 
 ## 放置位置
 
 - 模块表：`Modules/<模块>/DbChecks/`，命名空间 `Modules\<模块>\DbChecks`
-- 项目级（非模块）表：`app/DbChecks/`，命名空间 `App\DbChecks`
+- 项目级（非模块）表：`Modules/ABase/DbChecks/`，命名空间 `Modules\ABase\DbChecks`（挂 ABase 基础模块；旧口径 app/DbChecks 与「代码只在 Modules/」铁律及编辑钩子冲突，已废弃）
 
-通过 `config/dbcheck.php` 的 `scan` 声明扫描根（可用 `dbcheck:init` 生成）：
+通过 `config/dbcheck.php` 的 `scan` 声明扫描根（可用 `dbcheck:init` 生成）。
+**框架无任何隐式默认扫描目录，所有要扫描的根都必须显式定义**；包默认模板只预置常规根
+app/DbChecks（目录不存在时自动跳过），本项目挂 ABase：
 
 ```php
+// 包默认模板（约定根，目录不存在自动跳过）
 'scan' => [
     ['path' => base_path('app/DbChecks'), 'namespace' => 'App\\DbChecks\\'],
-    ['path' => base_path('Modules'), 'namespace' => 'Modules\\'],
+],
+
+// 本项目显式定义（Laravel 框架表挂 ABase；Dcat Admin 后台表 admin_* 挂 DcatAdmin）
+'scan' => [
+    ['path' => base_path('Modules/ABase/DbChecks'), 'namespace' => 'Modules\\ABase\\DbChecks\\'],
+    ['path' => base_path('Modules/DcatAdmin/DbChecks'), 'namespace' => 'Modules\\DcatAdmin\\DbChecks\\'],
 ],
 ```
 
@@ -64,6 +71,7 @@ public static function columns(): array
 ```
 
 - `nullable` 缺省 `false`；有 `default` 键才设置默认值（显式 `null` 视为默认 NULL）。
+- `'primary' => true` 声明该列为主键（仅建表时生效；主键不参与差异比较，`ColumnType::ID` 自带主键）。
 - `comment` 仅用于建表/补列，不参与差异比较。
 
 类型映射（MySQL 口径）：
@@ -86,6 +94,7 @@ public static function columns(): array
 | `DATE` / `TIME` / `TIMESTAMP` | 同名方法 | 同名类型 |
 | `DATETIME` | `dateTime` | `datetime` |
 | `DECIMAL` | `decimal($precision,$scale)` | `decimal(10,7)` |
+| `ENUM` | `enum($values)` | `enum('a','b')`（取值列表放 `values` 键） |
 
 时间与小数类的默认值按**字符串严格比对**：`TIME` 默认写 `'09:00:00'`、`DECIMAL` 默认写 `'0.0000000'`，不能简写成 `0` 或 `'9:00'`。
 
@@ -103,20 +112,51 @@ public static function indexes(): array
 }
 ```
 
+## 表编码声明（可选）
+
+默认不声明 = 建表用连接默认字符集，且**不比对**表编码。声明了（任一非 null）就比对：
+
+```php
+/**
+ * 建表字符集（仅建表生效；未声明用连接默认）。
+ */
+protected static function charset(): ?string
+{
+    return 'utf8mb4';
+}
+
+/**
+ * 建表排序规则（仅建表生效；未声明用连接默认）。
+ */
+protected static function collation(): ?string
+{
+    return 'utf8mb4_unicode_ci';
+}
+```
+
+- 建表时覆盖连接默认（编译进 `default character set ... collate ...`）。
+- 比对读实际表编码（MySQL 读 information_schema），不一致报 `table.charset` 项，
+  修复 = `ALTER TABLE ... CONVERT TO CHARACTER SET ...`（会连带转换已有数据字符集；
+  CONVERT 可能同时把 TEXT 类列升级类型，如 utf8mb3 下 mediumtext→longtext，修回类型交给 column.* 项）。
+- 只声明 `collation()` 不声明 `charset()` 时：能比对但不能修复（CONVERT 必须带字符集）。
+- PG 驱动不支持读表编码，编码比对自动跳过。
+
 ## 驱动适配
+
+数据库类型判断由 `Dongasai\Dbcheck\Adapters\DbDriver` 负责：默认**按连接检查判断**自动选择，
+适配器映射不做配置化硬编码；例外用运行参数覆盖。选择优先级：
+**显式参数**（`AdapterFactory::make($connection, $override)`）→ **运行期覆盖**（`DbDriver::override('mysql57')` 或命令行 `--adapter=`）→ **自动探测**（mysql/mariadb → Mysql8Adapter，pgsql/postgres → PgsqlAdapter）。
 
 | 适配器 | 适用 | 特点 |
 |--------|------|------|
-| `Mysql8Adapter` | MySQL 8+（默认） | json 原生类型 |
+| `Mysql8Adapter` | MySQL 8+（自动探测默认） | json 原生类型 |
 | `MysqlAdapter` | 5.7 等旧版 | json 落 longText |
 | `PgsqlAdapter` | PG / PG 系 | unsigned 回落、boolean 原生、忽略 comment、仅存在性比对 |
 
-按连接覆盖（`config/dbcheck.php`）：
+驱动别名：`mysql8` / `mysql` / `mariadb` / `mysql57` / `pgsql` / `postgres`（也可用适配器类名）。
 
-```php
-'adapters' => [
-    'default' => Dongasai\Dbcheck\Adapters\MysqlAdapter::class,
-],
+```bash
+php artisan dbcheck:check --adapter=mysql57   # 5.7 等无原生 JSON 的旧版本，运行期覆盖驱动
 ```
 
 ## 分组
@@ -126,7 +166,7 @@ public static function indexes(): array
 - 返回 `null` → 常规检查，`dbcheck:check` 默认执行；
 - 返回任意字符串（如 `'testdata'`）→ 分组检查，默认**不执行**，需 `--group=<名称>` 显式触发。
 
-所谓 **seeder 就是执行某分组的 row 检查 + field 检查**：
+所谓 **seeder 就是执行某分组的检查（如 data + field）**：
 
 ```bash
 php artisan dbcheck:check --group=testdata
@@ -140,13 +180,15 @@ php artisan dbcheck:check                       # 交互：先看 SQL 再确认�
 php artisan dbcheck:check --no-interaction      # 只报告，零变更
 php artisan dbcheck:check --group=testdata      # 只跑指定分组
 php artisan dbcheck:check --all-groups          # 跑全部分组
+php artisan dbcheck:check --connection=mysql    # 指定数据库连接名（默认用 database.default；显式声明连接的检查器不受影响）
+php artisan dbcheck:check --fix-flow=inline     # 边查边修（每个检查器查完即逐条确认修复；默认 batch=先全量报告）
 ```
 
 ## 边界
 
 - 不做破坏性修复：行差异只 `ADD COLUMN` / `CHANGE COLUMN` / `ADD INDEX` / 同名索引重建。
 - 额外列 / 额外索引交互询问且**默认不处理**，非交互只报告、不计错误。
-- 不比较注释、字符集、排序规则、`AUTO_INCREMENT`、主键。
+- 不比较注释、`AUTO_INCREMENT`、主键；表级字符集/排序规则按**声明制**：`charset()`/`collation()` 声明了才比对（未声明不比对）。
 - 索引按「类型（唯一/普通）+ 字段」判存在，**索引名不作为存在依据**（避免重复建）。
 
 ## 验证清单

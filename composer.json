@@ -1,6 +1,6 @@
 {
     "name": "dongasai/dbcheck",
-    "description": "数据库结构/数据自检与修复框架（按表四类检查：存在、行差异、固定数据、字段明细）",
+    "description": "数据库结构/数据自检与修复框架（按表三类检查：表结构、固定数据、字段明细）",
     "type": "library",
     "license": "MIT",
     "keywords": ["laravel", "database", "schema", "check"],

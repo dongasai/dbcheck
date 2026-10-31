@@ -4,29 +4,25 @@ return [
     /*
      * 自动发现扫描根（配置驱动，不依赖 laravel-modules）。
      *
+     * 框架没有任何隐式默认扫描目录——所有要扫描的目录都必须在此显式定义。
+     * 本默认模板仅预置常规约定根 app/DbChecks（目录不存在时自动跳过，不报错），
+     * 项目按自身约定（如 Modules/<模块>/DbChecks/）显式追加对应根即可。
+     *
      * 每个根包含：
      *  - path：要递归扫描的目录（绝对路径，或相对 base_path() 的相对路径）
      *  - namespace：该目录对应的 PSR-4 基命名空间
      *
      * 注册表会递归扫描 <path> 下的所有 *.php，按「去掉 path 前缀 → 命名空间化」推导类名，
      * 收集其中实现 Dongasai\Dbcheck\Contracts\DbCheckInterface 的具体（非抽象）类。
-     *
-     * 例：扫描本项目的各模块 DbChecks 目录（约定 Modules/<模块>/DbChecks/）。
-     * 若使用 nwidart/laravel-modules，可仅配置 Modules 根，由检查器自身的 $enabled 控制开关；
-     * 也可为每个模块单独配置一个根，从而只扫描已启用模块。
      */
     'scan' => [
-        // ['path' => base_path('Modules'), 'namespace' => 'Modules\\'],
+        ['path' => base_path('app/DbChecks'), 'namespace' => 'App\\DbChecks\\'],
     ],
 
     /*
-     * 驱动适配器覆盖（可选）。
-     *
-     * 键为连接名（默认连接用 'default'），值为适配器类名。
-     * 默认按 Laravel 驱动自动选择：mysql/mariadb → Mysql8Adapter（MySQL 8+，json 原生类型）；
-     * pgsql/postgres → PgsqlAdapter（存在性检查，DDL 适配 PG）。
-     * 若数据库为 MySQL 5.7 等无原生 JSON 的旧版本，可显式覆盖为 MysqlAdapter（json 落 longText）：
-     *  'adapters' => ['default' => Dongasai\Dbcheck\Adapters\MysqlAdapter::class],
+     * 驱动适配器不做配置化硬编码：数据库类型由 Adapters\DbDriver 按连接检查判断
+     * （mysql/mariadb → Mysql8Adapter；pgsql/postgres → PgsqlAdapter），
+     * 例外用运行参数覆盖（命令行 --adapter= 或 DbDriver::override()，
+     * 如 MySQL 5.7 旧版指定 mysql57，json 落 longText）。
      */
-    'adapters' => [],
 ];

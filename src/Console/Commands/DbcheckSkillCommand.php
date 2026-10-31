@@ -4,6 +4,7 @@ namespace Dongasai\Dbcheck\Console\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
+use Symfony\Component\Console\Question\ChoiceQuestion;
 
 /**
  * 把 dbcheck 的 agent 引导 skill 注册到项目已有的 agent skill 目录（交互式）。
@@ -225,10 +226,15 @@ class DbcheckSkillCommand extends Command
     }
 
     /**
-     * 交互式选择目标目录。
+     * 交互式选择目标目录（多选）。
      *
-     * @param array<int, string> $dirs
-     * @return array<int, string>
+     * 使用 Symfony ChoiceQuestion 多选（setMultiselect），保留「全部目录」「自定义路径」两个快捷项：
+     * - 选中「全部目录」时返回全部候选目录；
+     * - 选中「自定义路径」时追加一次手输，输入非空则并入结果，为空则忽略该选择；
+     * - 其余按所选目录返回（按输入顺序去重，并过滤快捷项后与候选目录求交）。
+     *
+     * @param array<int, string> $dirs 候选目录列表（相对项目根的路径）
+     * @return array<int, string> 最终要注册的目录列表；用户取消时可能为空数组
      */
     protected function chooseDirs(array $dirs): array
     {
@@ -240,24 +246,43 @@ class DbcheckSkillCommand extends Command
             return [];
         }
 
-        $options = array_merge($dirs, ['全部目录', '自定义路径']);
-        $defaultIndex = (int) array_search($this->defaultDirs[0], $options, true);
-        if ($defaultIndex === false || $defaultIndex < 0) {
-            $defaultIndex = 0;
-        }
-        $picked = (string) $this->choice('请选择要注册到的 agent skill 目录', $options, $defaultIndex);
+        $allMark = '全部目录';
+        $customMark = '自定义路径';
+        $options = array_merge($dirs, [$allMark, $customMark]);
 
-        if ($picked === '自定义路径') {
-            $answer = (string) $this->ask('请输入 skill 目录路径');
+        // 默认选中内置默认目录所在索引；不在候选里时默认选「全部目录」（其索引恒为候选目录数）
+        $search = array_search($this->defaultDirs[0], $options, true);
+        $defaultIndex = $search === false ? count($dirs) : (int) $search;
 
-            return $answer === '' ? [] : [$answer];
-        }
+        $question = new ChoiceQuestion(
+            '请选择要注册到的 agent skill 目录（可多选，逗号分隔，如 0,2）',
+            $options,
+            (string) $defaultIndex
+        );
+        $question->setMultiselect(true);
 
-        if ($picked === '全部目录') {
+        /** @var array<int, string> $picked */
+        $picked = (array) $this->getHelper('question')->ask($this->input, $this->output, $question);
+
+        if (in_array($allMark, $picked, true)) {
             return $dirs;
         }
 
-        return [$picked];
+        $result = [];
+        foreach ($picked as $item) {
+            if ($item === $customMark) {
+                $answer = (string) $this->ask('请输入 skill 目录路径');
+                if ($answer !== '') {
+                    $result[] = $answer;
+                }
+                continue;
+            }
+            if (in_array($item, $dirs, true)) {
+                $result[] = $item;
+            }
+        }
+
+        return array_values(array_unique($result));
     }
 
     /**

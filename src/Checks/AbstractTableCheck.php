@@ -3,69 +3,157 @@
 namespace Dongasai\Dbcheck\Checks;
 
 use Dongasai\Dbcheck\Adapters\AdapterFactory;
+use Dongasai\Dbcheck\Contracts\DbCheckInterface;
 use Dongasai\Dbcheck\Contracts\TableSchemaProvider;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use LogicException;
 
 /**
- * 行差异检查基类（列 / 索引与最终结构是否一致；额外列/索引为可选处理项）。
+ * 表结构检查基类：一张表「当前应有完整结构」的唯一声明处。
  *
- * 同时实现 TableSchemaProvider，是该表「最终结构」的唯一声明处（columns/indexes 全量声明）。
- * 存在检查（ExistsCheck）通过 schema() 指向本类，避免两处维护同一张表定义。
+ * 模型：一个检查器定义一张表的最终结构（全部列 + 全部索引）——
+ *  - 表不存在：报表缺失项，修复 = 按最终结构建表；
+ *  - 表存在：比对列/索引差异并修复（额外列/索引为可选处理项，默认不处理）。
  *
- * 表不存在时 check() 返回空（仅由 ExistsCheck 报缺失），不重复报错。
- * 修复只做 ADD COLUMN / CHANGE COLUMN / ADD INDEX / 同名索引重建；额外项仅在确认后 DROP。
+ * 可选声明表编码 charset()/collation()：建表时覆盖连接默认；声明了才比对，
+ * 不一致报 table.charset 项，修复 = ALTER TABLE ... CONVERT TO CHARACTER SET。
  *
- * 列/索引比对深度由驱动适配器决定（MySQL/MySQL8 精确；PG 仅存在性）。
+ * 同时实现 TableSchemaProvider；实际建列由驱动适配器（AdapterFactory）完成，
+ * 以屏蔽 MySQL / PG 差异；列/索引比对深度由适配器决定（MySQL/MySQL8 精确；PG 仅存在性）。
  */
-abstract class AbstractTableRowCheck extends AbstractTableExistsCheck implements TableSchemaProvider
+abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvider
 {
     /**
-     * 最终结构声明即自身。
-     *
-     * @return class-string
+     * 是否启用该检查器（自动发现时 $enabled=false 会被跳过）。
      */
-    protected static function schema(): string
+    public static bool $enabled = true;
+
+    /**
+     * 所属分组（分组名由业务自行定义，框架不预置）。
+     *
+     *  - 返回 null：常规检查，dbcheck:check 默认执行；
+     *  - 返回任意字符串（如 'testdata'）：分组检查，默认不执行，
+     *    需 dbcheck:check --group=<分组名> 显式触发（所谓 seeder 即执行该分组的检查）。
+     */
+    public static function group(): ?string
     {
-        return static::class;
+        return null;
     }
 
     /**
-     * 表名（由具体子类声明）。
+     * 使用的数据库连接名（null = 默认连接）。具体检查器可覆盖。
+     */
+    protected static function connectionName(): ?string
+    {
+        return null;
+    }
+
+    /**
+     * 建表字符集（null = 用连接默认，且不参与比对）。具体检查器可覆盖。
+     *
+     * 仅建表时生效；比对为「声明制」——返回 null 即不比对表编码。
+     */
+    protected static function charset(): ?string
+    {
+        return null;
+    }
+
+    /**
+     * 建表排序规则（null = 用连接默认，且不参与比对）。具体检查器可覆盖。
+     *
+     * 仅建表时生效；比对为「声明制」——返回 null 即不比对表编码。
+     */
+    protected static function collation(): ?string
+    {
+        return null;
+    }
+
+    /**
+     * 表名。
      */
     abstract public static function table(): string;
 
     /**
-     * 列定义（最终态全量）。
+     * 列定义（全部列，最终态）。
      *
      * @return array<string, array<string, mixed>>
      */
     abstract public static function columns(): array;
 
     /**
-     * 索引定义（最终态全量，不含主键）。
+     * 索引定义（全部索引，最终态，不含主键）。
      *
      * @return array<string, array<string, mixed>>
      */
     abstract public static function indexes(): array;
 
     /**
-     * 行差异检查。
+     * 展示名（默认取表名）。
+     */
+    public static function moduleName(): string
+    {
+        return static::table();
+    }
+
+    /**
+     * 表是否存在。
+     */
+    protected static function hasTable(): bool
+    {
+        return Schema::connection(static::connectionName())->hasTable(static::table());
+    }
+
+    /**
+     * 表结构检查：表缺失报表缺失项；表存在比对表编码（声明了才比）与列/索引差异。
      *
      * @return array<int, array<string, mixed>>
      */
     public static function check(): array
     {
-        $table = static::table();
         if (!static::hasTable()) {
-            return [];
+            return [
+                [
+                    'key' => 'table',
+                    'type' => 'table',
+                    'message' => '表 ' . static::table() . ' 不存在',
+                    'optional' => false,
+                    'repair' => '按最终结构建表 ' . static::table(),
+                ],
+            ];
         }
 
+        $table = static::table();
         $conn = static::connectionName();
         $adapter = AdapterFactory::make($conn);
         $actualCols = $adapter->actualColumns($conn, $table);
         $issues = [];
+
+        // 表级字符集/排序规则（声明制：声明了才比对；驱动不支持读表编码时自动跳过）
+        $declaredCharset = static::charset();
+        $declaredCollation = static::collation();
+        if ($declaredCharset !== null || $declaredCollation !== null) {
+            $actualCharset = $adapter->actualTableCharset($conn, $table);
+            if ($actualCharset !== null) {
+                $diffs = [];
+                if ($declaredCharset !== null && $actualCharset['charset'] !== $declaredCharset) {
+                    $diffs[] = '字符集 实际 ' . $actualCharset['charset'] . ' ≠ 期望 ' . $declaredCharset;
+                }
+                if ($declaredCollation !== null && $actualCharset['collation'] !== $declaredCollation) {
+                    $diffs[] = '排序规则 实际 ' . $actualCharset['collation'] . ' ≠ 期望 ' . $declaredCollation;
+                }
+                if ($diffs !== []) {
+                    $issues[] = [
+                        'key' => 'table.charset',
+                        'type' => 'table',
+                        'message' => '表 ' . $table . ' 编码不一致：' . implode('；', $diffs),
+                        'optional' => false,
+                        'repair' => 'CONVERT TO ' . $declaredCharset . ($declaredCollation !== null ? ' COLLATE ' . $declaredCollation : ''),
+                    ];
+                }
+            }
+        }
 
         // 列存在性（所有驱动）
         foreach (static::columns() as $name => $def) {
@@ -199,6 +287,7 @@ abstract class AbstractTableRowCheck extends AbstractTableExistsCheck implements
             if ($equivalent) {
                 continue;
             }
+
             $issues[] = [
                 'key' => 'extra_index.' . $an,
                 'type' => 'extra_index',
@@ -212,12 +301,27 @@ abstract class AbstractTableRowCheck extends AbstractTableExistsCheck implements
     }
 
     /**
-     * 修复行差异项。未知 key 抛异常。
+     * 修复表结构异常项。未知 key 抛 LogicException。
      */
     public static function fix(string $key): void
     {
         if ($key === 'table') {
-            parent::fix($key);
+            static::createTable();
+
+            return;
+        }
+
+        if ($key === 'table.charset') {
+            $charset = static::charset();
+            if ($charset === null) {
+                throw new LogicException('表 ' . static::table() . ' 未声明字符集（charset()），无法生成 CONVERT 语句');
+            }
+            $collation = static::collation();
+            DB::connection(static::connectionName())->statement(
+                'ALTER TABLE `' . str_replace('`', '', static::table()) . '`'
+                . ' CONVERT TO CHARACTER SET ' . $charset
+                . ($collation !== null ? ' COLLATE ' . $collation : '')
+            );
 
             return;
         }
@@ -298,5 +402,51 @@ abstract class AbstractTableRowCheck extends AbstractTableExistsCheck implements
         }
 
         throw new LogicException('未知修复项: ' . $key);
+    }
+
+    /**
+     * 预览修复将要执行的 SQL（使用连接层 pretend 模式，不落库）。
+     *
+     * @return array<int, string> 将要执行的 SQL 语句（仅写操作，已内联绑定值）
+     */
+    public static function preview(string $key): array
+    {
+        return DB::connection(static::connectionName())->pretend(function () use ($key) {
+            static::fix($key);
+        });
+    }
+
+    /**
+     * 按 columns()+indexes() 建表（列可声明 'primary' => true 指定主键，ColumnType::ID 自带主键）。
+     */
+    protected static function createTable(): void
+    {
+        $adapter = AdapterFactory::make(static::connectionName());
+
+        Schema::connection(static::connectionName())->create(static::table(), function ($table) use ($adapter) {
+            // 声明了表编码则覆盖连接默认
+            $charset = static::charset();
+            $collation = static::collation();
+            if ($charset !== null) {
+                $table->charset = $charset;
+            }
+            if ($collation !== null) {
+                $table->collation = $collation;
+            }
+            foreach (static::columns() as $name => $def) {
+                $adapter->buildColumn($table, (string) $name, $def);
+                if (!empty($def['primary'])) {
+                    $table->primary($name);
+                }
+            }
+            foreach (static::indexes() as $name => $idx) {
+                $cols = (array) ($idx['columns'] ?? []);
+                if (!empty($idx['unique'])) {
+                    $table->unique($cols, (string) $name);
+                } else {
+                    $table->index($cols, (string) $name);
+                }
+            }
+        });
     }
 }

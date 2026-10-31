@@ -99,6 +99,10 @@ class PgsqlAdapter extends DatabaseAdapter
             case ColumnType::DECIMAL:
                 $col = $table->decimal($name, (int) ($def['precision'] ?? 10), (int) ($def['scale'] ?? 0));
                 break;
+            case ColumnType::ENUM:
+                // PG 下由 Laravel 编译为带 check 约束的文本列
+                $col = $table->enum($name, array_map('strval', (array) ($def['values'] ?? [])));
+                break;
             default:
                 throw new \InvalidArgumentException('未知的列类型声明: ' . $type);
         }

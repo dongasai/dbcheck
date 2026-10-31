@@ -6,7 +6,7 @@ namespace Dongasai\Dbcheck\Contracts;
  * 数据库检查器契约。
  *
  * 每个检查器（具体类）实现本接口，由 DbCheckRegistry 自动发现并分类执行。
- * 四类检查（存在 / 行差异 / 固定数据 / 字段明细）对应四个抽象基类，
+ * 三类检查（表结构 / 固定数据 / 字段明细）对应三个抽象基类，
  * 它们均实现本接口；直接实现本接口却不继承任一抽象基类的类会被 grouped() 判定为错误。
  */
 interface DbCheckInterface

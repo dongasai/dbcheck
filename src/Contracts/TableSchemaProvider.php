@@ -5,9 +5,9 @@ namespace Dongasai\Dbcheck\Contracts;
 /**
  * 表最终结构声明契约。
  *
- * 行差异检查（AbstractTableRowCheck）实现本接口，是该表「当前应有完整结构」的唯一声明处：
+ * 表结构检查（AbstractTableCheck）实现本接口，是该表「当前应有完整结构」的唯一声明处：
  * 列（columns）与索引（indexes）均以最终态声明，不描述迁移增量过程。
- * 存在检查（AbstractTableExistsCheck）通过 schema() 指向本实现，避免两处维护同一张表的定义。
+ * 表不存在时按声明建表，存在时按声明比对并修复差异。
  */
 interface TableSchemaProvider
 {
