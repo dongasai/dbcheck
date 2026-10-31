@@ -4,6 +4,7 @@ namespace Dongasai\Dbcheck;
 
 use Dongasai\Dbcheck\Console\Commands\CheckInfoCommand;
 use Dongasai\Dbcheck\Console\Commands\DbcheckInitCommand;
+use Dongasai\Dbcheck\Console\Commands\DbcheckSkillCommand;
 use Illuminate\Support\ServiceProvider;
 
 /**
@@ -34,6 +35,7 @@ class DbcheckServiceProvider extends ServiceProvider
             $this->commands([
                 CheckInfoCommand::class,
                 DbcheckInitCommand::class,
+                DbcheckSkillCommand::class,
             ]);
 
             $this->publishes([
