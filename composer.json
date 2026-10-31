@@ -1,0 +1,28 @@
+{
+    "name": "dongasai/dbcheck",
+    "description": "数据库结构/数据自检与修复框架（按表四类检查：存在、行差异、固定数据、字段明细）",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["laravel", "database", "schema", "check"],
+    "require": {
+        "php": ">=7.4",
+        "illuminate/console": "^8.0 || ^9.0 || ^10.0 || ^11.0 || ^12.0",
+        "illuminate/database": "^8.0 || ^9.0 || ^10.0 || ^11.0 || ^12.0",
+        "illuminate/support": "^8.0 || ^9.0 || ^10.0 || ^11.0 || ^12.0",
+        "doctrine/dbal": "^2.0 || ^3.0 || ^4.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Dongasai\\Dbcheck\\": "src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Dongasai\\Dbcheck\\DbcheckServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
