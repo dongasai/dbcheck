@@ -3,6 +3,7 @@
 namespace Dongasai\Dbcheck;
 
 use Dongasai\Dbcheck\Console\Commands\CheckInfoCommand;
+use Dongasai\Dbcheck\Console\Commands\DbcheckInitCommand;
 use Illuminate\Support\ServiceProvider;
 
 /**
@@ -32,7 +33,12 @@ class DbcheckServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 CheckInfoCommand::class,
+                DbcheckInitCommand::class,
             ]);
+
+            $this->publishes([
+                __DIR__ . '/../config/dbcheck.php' => base_path('config/dbcheck.php'),
+            ], 'dbcheck-config');
         }
     }
 }
