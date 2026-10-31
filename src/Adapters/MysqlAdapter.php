@@ -2,6 +2,7 @@
 
 namespace Dongasai\Dbcheck\Adapters;
 
+use Dongasai\Dbcheck\Support\ColumnType;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 
@@ -53,7 +54,7 @@ class MysqlAdapter extends DatabaseAdapter
      */
     public function buildColumn(Blueprint $table, string $name, array $def)
     {
-        $type = $def['type'] ?? 'string';
+        $type = $def['type'] ?? ColumnType::DEFAULT;
         $col = $this->newColumn($table, $name, $type, $def);
         $this->applyModifiers($col, $def);
 
@@ -66,47 +67,47 @@ class MysqlAdapter extends DatabaseAdapter
     protected function newColumn(Blueprint $table, string $name, string $type, array $def)
     {
         switch ($type) {
-            case 'id':
+            case ColumnType::ID:
                 return $table->bigIncrements($name);
-            case 'bigInteger':
+            case ColumnType::BIG_INTEGER:
                 return $table->bigInteger($name);
-            case 'unsignedBigInteger':
+            case ColumnType::UNSIGNED_BIG_INTEGER:
                 return $table->unsignedBigInteger($name);
-            case 'integer':
+            case ColumnType::INTEGER:
                 return $table->integer($name);
-            case 'unsignedInteger':
+            case ColumnType::UNSIGNED_INTEGER:
                 return $table->unsignedInteger($name);
-            case 'smallInteger':
+            case ColumnType::SMALL_INTEGER:
                 return $table->smallInteger($name);
-            case 'unsignedSmallInteger':
+            case ColumnType::UNSIGNED_SMALL_INTEGER:
                 return $table->unsignedSmallInteger($name);
-            case 'tinyInteger':
+            case ColumnType::TINY_INTEGER:
                 return $table->tinyInteger($name);
-            case 'unsignedTinyInteger':
+            case ColumnType::UNSIGNED_TINY_INTEGER:
                 return $table->unsignedTinyInteger($name);
-            case 'boolean':
+            case ColumnType::BOOLEAN:
                 return $table->boolean($name);
-            case 'string':
+            case ColumnType::STRING:
                 return $table->string($name, (int) ($def['length'] ?? 255));
-            case 'char':
+            case ColumnType::CHAR:
                 return $table->char($name, (int) ($def['length'] ?? 255));
-            case 'text':
+            case ColumnType::TEXT:
                 return $table->text($name);
-            case 'mediumText':
+            case ColumnType::MEDIUM_TEXT:
                 return $table->mediumText($name);
-            case 'longText':
+            case ColumnType::LONG_TEXT:
                 return $table->longText($name);
-            case 'json':
+            case ColumnType::JSON:
                 return $this->jsonColumn($table, $name);
-            case 'date':
+            case ColumnType::DATE:
                 return $table->date($name);
-            case 'time':
+            case ColumnType::TIME:
                 return $table->time($name);
-            case 'timestamp':
+            case ColumnType::TIMESTAMP:
                 return $table->timestamp($name);
-            case 'datetime':
+            case ColumnType::DATETIME:
                 return $table->dateTime($name);
-            case 'decimal':
+            case ColumnType::DECIMAL:
                 return $table->decimal($name, (int) ($def['precision'] ?? 10), (int) ($def['scale'] ?? 0));
             default:
                 throw new \InvalidArgumentException('未知的列类型声明: ' . $type);
@@ -150,50 +151,50 @@ class MysqlAdapter extends DatabaseAdapter
 
     public function expectedColumnType(array $def): string
     {
-        $type = $def['type'] ?? 'string';
+        $type = $def['type'] ?? ColumnType::DEFAULT;
 
         switch ($type) {
-            case 'id':
+            case ColumnType::ID:
                 return 'bigint unsigned';
-            case 'bigInteger':
+            case ColumnType::BIG_INTEGER:
                 return 'bigint';
-            case 'unsignedBigInteger':
+            case ColumnType::UNSIGNED_BIG_INTEGER:
                 return 'bigint unsigned';
-            case 'integer':
+            case ColumnType::INTEGER:
                 return 'int';
-            case 'unsignedInteger':
+            case ColumnType::UNSIGNED_INTEGER:
                 return 'int unsigned';
-            case 'smallInteger':
+            case ColumnType::SMALL_INTEGER:
                 return 'smallint';
-            case 'unsignedSmallInteger':
+            case ColumnType::UNSIGNED_SMALL_INTEGER:
                 return 'smallint unsigned';
-            case 'tinyInteger':
+            case ColumnType::TINY_INTEGER:
                 return 'tinyint';
-            case 'unsignedTinyInteger':
+            case ColumnType::UNSIGNED_TINY_INTEGER:
                 return 'tinyint unsigned';
-            case 'boolean':
+            case ColumnType::BOOLEAN:
                 return 'tinyint';
-            case 'string':
+            case ColumnType::STRING:
                 return 'varchar(' . ((int) ($def['length'] ?? 255)) . ')';
-            case 'char':
+            case ColumnType::CHAR:
                 return 'char(' . ((int) ($def['length'] ?? 255)) . ')';
-            case 'text':
+            case ColumnType::TEXT:
                 return 'text';
-            case 'mediumText':
+            case ColumnType::MEDIUM_TEXT:
                 return 'mediumtext';
-            case 'longText':
+            case ColumnType::LONG_TEXT:
                 return 'longtext';
-            case 'json':
+            case ColumnType::JSON:
                 return $this->jsonExpectedType();
-            case 'date':
+            case ColumnType::DATE:
                 return 'date';
-            case 'time':
+            case ColumnType::TIME:
                 return 'time';
-            case 'timestamp':
+            case ColumnType::TIMESTAMP:
                 return 'timestamp';
-            case 'datetime':
+            case ColumnType::DATETIME:
                 return 'datetime';
-            case 'decimal':
+            case ColumnType::DECIMAL:
                 return 'decimal(' . ((int) ($def['precision'] ?? 10)) . ',' . ((int) ($def['scale'] ?? 0)) . ')';
             default:
                 throw new \InvalidArgumentException('未知的列类型声明: ' . $type);

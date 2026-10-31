@@ -25,6 +25,18 @@ abstract class AbstractTableExistsCheck implements DbCheckInterface
     public static bool $enabled = true;
 
     /**
+     * 所属分组（分组名由业务自行定义，框架不预置）。
+     *
+     *  - 返回 null：常规检查，dbcheck:check 默认执行；
+     *  - 返回任意字符串（如 'testdata'）：分组检查，默认不执行，
+     *    需 dbcheck:check --group=<分组名> 显式触发（所谓 seeder 即执行该分组的 row/field 检查）。
+     */
+    public static function group(): ?string
+    {
+        return null;
+    }
+
+    /**
      * 最终结构声明类（实现 TableSchemaProvider）。
      *
      * 直接子类（ExistsCheck）覆盖此方法指向对应的 RowCheck；RowCheck 自身返回 static::class。

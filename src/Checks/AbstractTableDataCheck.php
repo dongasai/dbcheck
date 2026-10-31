@@ -26,6 +26,18 @@ abstract class AbstractTableDataCheck implements DbCheckInterface
     public static bool $enabled = true;
 
     /**
+     * 所属分组（分组名由业务自行定义，框架不预置）。
+     *
+     *  - 返回 null：常规检查，dbcheck:check 默认执行；
+     *  - 返回任意字符串（如 'testdata'）：分组检查，默认不执行，
+     *    需 dbcheck:check --group=<分组名> 显式触发。
+     */
+    public static function group(): ?string
+    {
+        return null;
+    }
+
+    /**
      * 表名。
      */
     abstract public static function table(): string;

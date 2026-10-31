@@ -9,8 +9,14 @@ use Illuminate\Console\Command;
  * 数据库自检与修复命令。
  *
  * 用法：
- *   php artisan dbcheck:check                # 交互：逐项询问是否修复（先看 SQL 再确认）
+ *   php artisan dbcheck:check                    # 交互：逐项询问是否修复（先看 SQL 再确认）
  *   php artisan dbcheck:check --no-interaction  # 只报告，不执行任何变更
+ *   php artisan dbcheck:check --group=testdata  # 只执行 testdata 分组（即播种测试数据）
+ *   php artisan dbcheck:check --all-groups      # 执行全部分组（含测试数据）
+ *
+ * 分组：检查器通过 group() 自行声明分组名（任意字符串，框架不预置）；
+ * group() 返回 null 表示常规检查（默认执行），返回非空字符串表示分组检查
+ * （默认不执行，需 --group=<名称> 显式触发）——所谓 seeder 即执行该分组的 row/field 检查。
  *
  * 执行顺序：存在 → 行差异 → 固定数据 → 字段明细（按 DbCheckRegistry::grouped()）。
  * 每张检查器返回异常项，交互模式下先预览 SQL 再确认执行，执行后自动复检。
@@ -22,7 +28,7 @@ class CheckInfoCommand extends Command
      *
      * @var string
      */
-    protected $signature = 'dbcheck:check {--check=fields}';
+    protected $signature = 'dbcheck:check {--check=fields} {--group=* : 只执行指定分组（可多次），如 --group=testdata} {--all-groups : 执行全部分组（含 testdata）}';
 
     /**
      * 命令描述。
@@ -56,9 +62,29 @@ class CheckInfoCommand extends Command
         }
 
         $noInteraction = (bool) $this->option('no-interaction');
-        $groups = DbCheckRegistry::grouped();
-
         $allIssues = [];
+
+        $wanted = array_values(array_filter(array_map('strval', (array) $this->option('group'))));
+        $allGroups = (bool) $this->option('all-groups');
+
+        if ($allGroups) {
+            $groups = DbCheckRegistry::grouped(null, true);
+        } elseif (count($wanted) > 0) {
+            // 指定了分组：合并多个分组的检查器（去重，保持类别顺序）
+            $groups = ['exist' => [], 'row' => [], 'data' => [], 'field' => []];
+            foreach ($wanted as $g) {
+                foreach (DbCheckRegistry::grouped($g) as $k => $list) {
+                    foreach ($list as $c) {
+                        if (!in_array($c, $groups[$k], true)) {
+                            $groups[$k][] = $c;
+                        }
+                    }
+                }
+            }
+        } else {
+            // 未指定：只执行「常规」（group() 返回 null）的检查器，排除 testdata 等分组
+            $groups = DbCheckRegistry::grouped(null);
+        }
 
         foreach ($this->order as $gk => $label) {
             foreach ($groups[$gk] as $class) {

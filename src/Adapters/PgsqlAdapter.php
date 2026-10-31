@@ -2,6 +2,7 @@
 
 namespace Dongasai\Dbcheck\Adapters;
 
+use Dongasai\Dbcheck\Support\ColumnType;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 
@@ -42,60 +43,60 @@ class PgsqlAdapter extends DatabaseAdapter
      */
     public function buildColumn(Blueprint $table, string $name, array $def)
     {
-        $type = $def['type'] ?? 'string';
+        $type = $def['type'] ?? ColumnType::DEFAULT;
 
         switch ($type) {
-            case 'id':
+            case ColumnType::ID:
                 $col = $table->bigIncrements($name);
                 break;
-            case 'bigInteger':
-            case 'unsignedBigInteger':
+            case ColumnType::BIG_INTEGER:
+            case ColumnType::UNSIGNED_BIG_INTEGER:
                 $col = $table->bigInteger($name);
                 break;
-            case 'integer':
-            case 'unsignedInteger':
+            case ColumnType::INTEGER:
+            case ColumnType::UNSIGNED_INTEGER:
                 $col = $table->integer($name);
                 break;
-            case 'smallInteger':
-            case 'unsignedSmallInteger':
-            case 'tinyInteger':
-            case 'unsignedTinyInteger':
+            case ColumnType::SMALL_INTEGER:
+            case ColumnType::UNSIGNED_SMALL_INTEGER:
+            case ColumnType::TINY_INTEGER:
+            case ColumnType::UNSIGNED_TINY_INTEGER:
                 $col = $table->smallInteger($name);
                 break;
-            case 'boolean':
+            case ColumnType::BOOLEAN:
                 $col = $table->boolean($name);
                 break;
-            case 'string':
+            case ColumnType::STRING:
                 $col = $table->string($name, (int) ($def['length'] ?? 255));
                 break;
-            case 'char':
+            case ColumnType::CHAR:
                 $col = $table->char($name, (int) ($def['length'] ?? 255));
                 break;
-            case 'text':
+            case ColumnType::TEXT:
                 $col = $table->text($name);
                 break;
-            case 'mediumText':
+            case ColumnType::MEDIUM_TEXT:
                 $col = $table->mediumText($name);
                 break;
-            case 'longText':
+            case ColumnType::LONG_TEXT:
                 $col = $table->longText($name);
                 break;
-            case 'json':
+            case ColumnType::JSON:
                 $col = $table->json($name);
                 break;
-            case 'date':
+            case ColumnType::DATE:
                 $col = $table->date($name);
                 break;
-            case 'time':
+            case ColumnType::TIME:
                 $col = $table->time($name);
                 break;
-            case 'timestamp':
+            case ColumnType::TIMESTAMP:
                 $col = $table->timestamp($name);
                 break;
-            case 'datetime':
+            case ColumnType::DATETIME:
                 $col = $table->dateTime($name);
                 break;
-            case 'decimal':
+            case ColumnType::DECIMAL:
                 $col = $table->decimal($name, (int) ($def['precision'] ?? 10), (int) ($def['scale'] ?? 0));
                 break;
             default:
@@ -127,7 +128,7 @@ class PgsqlAdapter extends DatabaseAdapter
     public function expectedColumnType(array $def): string
     {
         // PG 仅做存在性比对，期望类型不参与严格比较；返回声明类型的小写形式即可。
-        return strtolower($def['type'] ?? 'string');
+        return strtolower($def['type'] ?? ColumnType::DEFAULT);
     }
 
     public function actualIndexes(?string $connection, string $table): array

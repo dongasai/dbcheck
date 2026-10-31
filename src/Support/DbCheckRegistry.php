@@ -84,11 +84,52 @@ class DbCheckRegistry
     }
 
     /**
+     * 解析检查器所属分组。
+     *
+     * 分组名完全由业务自行定义（如 'testdata'），框架不预置；
+     * 未声明 group() 或返回空字符串的检查器归为「常规」（null）。
+     *
+     * @param class-string<DbCheckInterface> $class
+     */
+    public static function groupOf(string $class): ?string
+    {
+        if (!method_exists($class, 'group')) {
+            return null;
+        }
+
+        $group = $class::group();
+
+        return ($group === null || $group === '') ? null : (string) $group;
+    }
+
+    /**
+     * 当前已注册检查器涉及的分组及各自数量（不含常规组）。
+     *
+     * @return array<string, int>
+     */
+    public static function groups(): array
+    {
+        $out = [];
+        foreach (static::all() as $c) {
+            $g = static::groupOf($c);
+            if ($g === null) {
+                continue;
+            }
+            $out[$g] = ($out[$g] ?? 0) + 1;
+        }
+        ksort($out);
+
+        return $out;
+    }
+
+    /**
      * 按继承的抽象基类分成四类（存在 → 行差异 → 固定数据 → 字段明细）。
      *
+     * @param string|null $group 只统计该分组的检查器；null 且 $all=false 时只统计「常规」（未分组）检查器
+     * @param bool $all true 时不按分组过滤（含分组与常规）
      * @return array{exist: array, row: array, data: array, field: array}
      */
-    public static function grouped(): array
+    public static function grouped(?string $group = null, bool $all = false): array
     {
         $groups = [
             'exist' => [],
@@ -98,6 +139,10 @@ class DbCheckRegistry
         ];
 
         foreach (static::all() as $c) {
+            if (!$all && static::groupOf($c) !== $group) {
+                continue;
+            }
+
             $ref = new \ReflectionClass($c);
 
             if ($ref->isSubclassOf(AbstractTableRowCheck::class)) {
