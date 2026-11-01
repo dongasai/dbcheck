@@ -3,6 +3,7 @@
 namespace Dongasai\Dbcheck\Checks;
 
 use Dongasai\Dbcheck\Contracts\DbCheckInterface;
+use Dongasai\Dbcheck\Support\DbCheckGroup;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use LogicException;
@@ -18,6 +19,10 @@ use LogicException;
  * 需要锁定的字段在 FieldCheck::rows() 显式声明后单独校验。
  *
  * 可选钩子 rowIssues($key, $def, $row)：声明表达不了的附加校验，需自行覆盖 fix()。
+ *
+ * 可选删除验证 deleteExtra()：与缺行检查相反——库中未被 rows() 声明的行视为多余数据，
+ * 修复 = 按行删除。默认关闭（删除属破坏性动作）；启用后该检查器默认归入
+ * DbCheckGroup::DELETE 分组，不随 dbcheck:check 默认执行，需 --group=delete 显式触发。
  */
 abstract class AbstractTableDataCheck implements DbCheckInterface
 {
@@ -27,15 +32,18 @@ abstract class AbstractTableDataCheck implements DbCheckInterface
     public static bool $enabled = true;
 
     /**
-     * 所属分组（分组名由业务自行定义，框架不预置）。
+     * 所属分组（分组名由业务自行定义，框架不预置业务名）。
      *
      *  - 返回 null：常规检查，dbcheck:check 默认执行；
      *  - 返回任意字符串（如 'testdata'）：分组检查，默认不执行，
      *    需 dbcheck:check --group=<分组名> 显式触发。
+     *
+     * 默认值：启用删除验证（deleteExtra()）的检查器归入 DbCheckGroup::DELETE
+     * （危险动作不随默认扫执行）；未启用则常规。子类覆盖本方法后以子类为准。
      */
     public static function group(): ?string
     {
-        return null;
+        return static::deleteExtra() ? DbCheckGroup::DELETE : null;
     }
 
     /**
@@ -56,6 +64,22 @@ abstract class AbstractTableDataCheck implements DbCheckInterface
      * @return array<string, array<string, mixed>>
      */
     abstract protected static function rows(): array;
+
+    /**
+     * 是否启用「删除验证」：删除库中未被 rows() 声明的多余数据行（与缺行检查相反）。
+     *
+     * 默认 false——删除属破坏性动作，仅适用于**数据全量受声明控制**的字典/固定表；
+     * 业务表（含用户产生的行）严禁开启，否则正常业务数据会被当多余行删除。
+     *
+     * 启用后的行为：
+     *  - check() 额外报告多余行（key = `data.extra.<身份JSON>`，身份列 = 各声明 where 列的并集）；
+     *  - fix('data.extra.<身份JSON>') 按身份列等值删除该行（null 值走 whereNull）；
+     *  - 检查器默认归入 DbCheckGroup::DELETE 分组（需 --group=delete 显式触发）。
+     */
+    protected static function deleteExtra(): bool
+    {
+        return false;
+    }
 
     /**
      * 使用的数据库连接名（null = 默认连接）。
@@ -121,14 +145,28 @@ abstract class AbstractTableDataCheck implements DbCheckInterface
             }
         }
 
+        // 删除验证：报告未被声明的多余行（与缺行检查相反）
+        if (static::deleteExtra()) {
+            foreach (static::extraRowIssues() as $issue) {
+                $issues[] = $issue;
+            }
+        }
+
         return $issues;
     }
 
     /**
-     * 补插缺失行。已存在则跳过。
+     * 修复数据异常项：`data.extra.<身份JSON>` 删多余行；其余 key 补插缺失行。
+     * 未知 key 抛 LogicException。
      */
     public static function fix(string $key): void
     {
+        if (strpos($key, 'data.extra.') === 0) {
+            static::deleteExtraRow(substr($key, strlen('data.extra.')));
+
+            return;
+        }
+
         $def = static::rows()[$key] ?? null;
         if ($def === null) {
             throw new LogicException('未知数据项: ' . $key);
@@ -216,6 +254,119 @@ abstract class AbstractTableDataCheck implements DbCheckInterface
     protected static function findRow(array $where)
     {
         return DB::connection(static::connectionName())->table(static::table())->where($where)->first();
+    }
+
+    /**
+     * 收集未被 rows() 声明的多余数据行（仅 deleteExtra() 启用时被调用）。
+     *
+     * 身份列 = 各声明 where 列的并集（实际使用中即业务唯一键）；
+     * 无任何声明时退化为整行值做身份（语义：声明为空 = 表应为空）。
+     * 异常项 key = `data.extra.<身份JSON>`，fix 经同一编码反向定位删除。
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    protected static function extraRowIssues(): array
+    {
+        $identityCols = [];
+        foreach (static::rows() as $def) {
+            foreach (array_keys((array) ($def['where'] ?? [])) as $col) {
+                $identityCols[$col] = true;
+            }
+        }
+        $identityCols = array_keys($identityCols);
+
+        $rows = DB::connection(static::connectionName())->table(static::table())->get();
+        $issues = [];
+        $seen = [];
+        foreach ($rows as $row) {
+            if (static::rowMatchesDeclaration($row)) {
+                continue;
+            }
+
+            $where = [];
+            foreach ($identityCols as $col) {
+                $where[$col] = $row->{$col} ?? null;
+            }
+            if ($where === []) {
+                foreach ((array) $row as $col => $val) {
+                    $where[$col] = $val;
+                }
+            }
+
+            $identity = json_encode($where, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if (isset($seen[$identity])) {
+                continue;
+            }
+            $seen[$identity] = true;
+
+            $issues[] = [
+                'key' => 'data.extra.' . $identity,
+                'type' => 'data',
+                'message' => '多余数据行（未在声明中，deleteExtra 已启用）: ' . $identity,
+                'optional' => false,
+                'repair' => '删除该行',
+            ];
+        }
+
+        return $issues;
+    }
+
+    /**
+     * 判断实际行是否被某条声明命中（where 各列等值，null 对 null；字符串化比较消除驱动类型差异）。
+     *
+     * @param object $row
+     */
+    protected static function rowMatchesDeclaration($row): bool
+    {
+        foreach (static::rows() as $def) {
+            $matched = true;
+            foreach ((array) ($def['where'] ?? []) as $col => $val) {
+                $rowVal = $row->{$col} ?? null;
+                if ($val === null) {
+                    if ($rowVal !== null) {
+                        $matched = false;
+                        break;
+                    }
+                    continue;
+                }
+                if ((string) $rowVal !== (string) $val) {
+                    $matched = false;
+                    break;
+                }
+            }
+            if ($matched) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * 删除多余数据行（fix 的 data.extra.* 分支）。
+     *
+     * @param string $identity 身份 JSON（check() 产出的 key 后缀）
+     */
+    protected static function deleteExtraRow(string $identity): void
+    {
+        if (!static::deleteExtra()) {
+            throw new LogicException('该检查器未启用删除验证（deleteExtra）: data.extra.' . $identity);
+        }
+
+        $where = json_decode($identity, true);
+        if (!is_array($where) || $where === []) {
+            throw new LogicException('无效的多余行身份标识: data.extra.' . $identity);
+        }
+
+        $query = DB::connection(static::connectionName())->table(static::table());
+        foreach ($where as $col => $val) {
+            if ($val === null) {
+                $query->whereNull($col);
+            } else {
+                $query->where($col, $val);
+            }
+        }
+        $query->delete();
     }
 
     /**

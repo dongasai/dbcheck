@@ -9,6 +9,7 @@
 | DbCheckRegistry.php | 检查器注册表：自动发现（扫描根支持 `*` 匹配模式）+ 手动注册 + 过滤 + 分组 + 三类归类 |
 | ColumnType.php | 22 个列类型常量（ID / BIG_INTEGER / … / DECIMAL / ENUM），DEFAULT = STRING；ENUM 需配 `values` 键 |
 | DatabaseCompat.php | 数据库兼容工具：驱动类型判断（driver/is/isMySQL/isPostgreSQL/isSqlite/isDM/isSqlServer）+ adapterClass() + insertIfMissing（先判重再插入，规避 PG 系 on conflict 无冲突目标不支持） |
+| DbCheckGroup.php | 框架标准分组常量：`DELETE = 'delete'`（启用 deleteExtra() 的检查器默认归入，危险动作不随默认扫执行）；业务分组名仍由检查器 group() 自行定义 |
 
 ## DbCheckRegistry 机制
 

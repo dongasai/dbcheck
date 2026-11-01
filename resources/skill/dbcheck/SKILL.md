@@ -18,7 +18,7 @@ description: dbcheck 数据库自检框架——按表编写三类检查类（�
 | 类型 | 基类 | 检查 | 修复 |
 |------|------|------|------|
 | 表结构 | `AbstractTableCheck` | 表不存在 → 报缺失；存在 → 表编码（声明了才比）与列/索引和最终结构比对 | 缺失按声明建表；编码不一致 `CONVERT TO`；补列、改列、补/重建索引 |
-| 固定数据 | `AbstractTableDataCheck` | 必需数据行是否存在 | 插行 |
+| 固定数据 | `AbstractTableDataCheck` | 必需数据行是否存在；可选删除验证（`deleteExtra()`）报未声明的多余行 | 缺行插行；启用删除验证时多余行删除（key `data.extra.*`，默认关） |
 | 字段明细 | `AbstractTableFieldCheck` | 声明字段的值 / JSON 数组项是否齐全 | 回写标量、补数组项 |
 
 `TableCheck` 同时是 `TableSchemaProvider`，是该表最终结构的**唯一声明处**：不存在创建，存在比对差异并修复——一张表一个检查器。
@@ -208,6 +208,12 @@ php artisan dbcheck:check --adapter=mysql57   # 5.7 等无原生 JSON 的旧版�
 php artisan dbcheck:check --group=testdata
 ```
 
+框架内置一个标准分组常量 `Dongasai\Dbcheck\Support\DbCheckGroup::DELETE`（`'delete'`）：
+DataCheck 覆盖 `deleteExtra(): true`（删除验证——删除未声明的多余数据行，与缺行检查相反）时，
+默认自动归入该分组——**删除属危险动作，不随 `dbcheck:check` 默认执行**，需 `--group=delete` 显式触发；
+子类覆盖 `group()` 后以子类为准。**只允许在数据全量受声明控制的字典/固定表上开启**，
+业务表开启会把正常业务数据当多余行删掉。
+
 ## 命令
 
 ```bash
@@ -224,7 +230,7 @@ php artisan dbcheck:check --check=all --detail --db-write  # 库自检 + 结构�
 
 ## 边界
 
-- 不做破坏性修复：行差异只 `ADD COLUMN` / `CHANGE COLUMN` / `ADD INDEX` / 同名索引重建。
+- 不做破坏性修复：行差异只 `ADD COLUMN` / `CHANGE COLUMN` / `ADD INDEX` / 同名索引重建；唯一例外是数据删除——仅当 DataCheck 显式开启 `deleteExtra()` 时才删未声明的多余行，且该检查器默认隔离在 `delete` 分组。
 - 额外列 / 额外索引交互询问且**默认不处理**，非交互只报告、不计错误。
 - 不比较注释、`AUTO_INCREMENT`、主键；表级字符集/排序规则按**声明制**：`charset()`/`collation()` 声明了才比对（未声明不比对）。
 - 索引按「类型（唯一/普通）+ 字段」判存在，**索引名不作为存在依据**（避免重复建）。

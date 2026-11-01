@@ -55,6 +55,12 @@ abstract class TestCase extends BaseTestCase
 
         $container->instance('db', $capsule->getDatabaseManager());
 
+        // Schema facade 根为 db.schema（全套 Laravel 才有该绑定），最小容器需手动补，
+        // 否则检查器 hasTable() 一类调用直接 BindingResolutionException
+        $container->singleton('db.schema', function () use ($container) {
+            return $container->make('db')->connection(config('database.default'))->getSchemaBuilder();
+        });
+
         Facade::clearResolvedInstances();
         Facade::setFacadeApplication($container);
 

@@ -25,7 +25,7 @@ class MysqlAdapterTest extends TestCase
     /**
      * @return array<string, array{0: array<string, mixed>, 1: string}>
      */
-    public function expectedTypeProvider(): array
+    public static function expectedTypeProvider(): array
     {
         return [
             'id' => [['type' => ColumnType::ID], 'bigint unsigned'],
@@ -66,7 +66,7 @@ class MysqlAdapterTest extends TestCase
     /**
      * @return array<string, array{0: string, 1: string}>
      */
-    public function normalizeProvider(): array
+    public static function normalizeProvider(): array
     {
         return [
             'bigint 去宽度' => ['bigint(20) unsigned', 'bigint unsigned'],
@@ -88,7 +88,7 @@ class MysqlAdapterTest extends TestCase
     /**
      * @return array<string, array{0: mixed, 1: array<string, mixed>, 2: bool}>
      */
-    public function defaultMatchesProvider(): array
+    public static function defaultMatchesProvider(): array
     {
         return [
             '未声明 default 且实际 NULL' => [null, [], true],

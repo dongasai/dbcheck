@@ -64,13 +64,13 @@ flowchart TD
 | 类型 | 基类 | check 检查 | fix 修复 |
 |------|------|-----------|---------|
 | 表结构 | AbstractTableCheck | 表不存在 → 报缺失；存在 → 表编码（声明制）与列/索引和最终结构比对 | 缺失按声明建表（编码可覆盖连接默认）；`CONVERT TO` 修编码；补列、改列、补/同名重建索引；额外项确认后 DROP |
-| 固定数据 | AbstractTableDataCheck | 必需数据行是否存在 | where + insert（+insertMerge），数组值 json_encode |
+| 固定数据 | AbstractTableDataCheck | 必需数据行是否存在；可选删除验证 deleteExtra() 报未声明的多余行 | 缺行 where + insert（+insertMerge），数组值 json_encode；`data.extra.*` 按身份 JSON 删多余行（默认关，启用即入 delete 分组） |
 | 字段明细 | AbstractTableFieldCheck | 声明字段标量值 / JSON 数组项齐全性 | 回写标量、只补缺失数组项 |
 
 ### 关键约定（红线）
 
 - **一张表一个检查器**：TableCheck 同时实现 TableSchemaProvider，是该表最终结构的唯一声明处（不存在创建，存在比对差异并修复）。禁止两处维护同一张表定义。
-- **异常项 key 命名**：`table` / `table.charset` / `column.<名>` / `index.<名>` / `extra_column.<名>` / `extra_index.<名>` / `data.<标识>` / `field.<标识>.<列>` / `item.<标识>.<列>.<项key>`。fix() 对未知 key 必须 LogicException。
+- **异常项 key 命名**：`table` / `table.charset` / `column.<名>` / `index.<名>` / `extra_column.<名>` / `extra_index.<名>` / `data.<标识>` / `data.extra.<身份JSON>` / `field.<标识>.<列>` / `item.<标识>.<列>.<项key>`。fix() 对未知 key 必须 LogicException。
 - **分组**：`group()` 返回 null = 常规（默认执行）；非空 = 分组检查（仅 `--group=<名>` / `--all-groups` 触发）。「seeder」语义 = 执行某分组的 row/field 检查。
 - **开关**：静态 `$enabled=false` 时自动发现跳过（手动 register() 不受影响）。
 - **比对深度由适配器决定**：MySQL/MySQL8 精确比对；PG / SQLite 仅存在性（防误报）。
@@ -103,6 +103,6 @@ flowchart TD
 
 ## 测试与已知缺口
 
-- **tests/ 已建**（2026-11-01 并入）：Unit 6 只（ColumnType / DbCheckRegistry / DbDriver / TableCheckLogic / MysqlAdapter / FieldCheckLogic）+ Integration 3 只（SQLite 全链：建表比对修复 / 固定数据 / 字段明细）+ Fixtures 9 只。运行：`composer test`，或 `phpunit --bootstrap tests/bootstrap.php tests`（需 standalone vendor——require-dev 含 phpunit 与 illuminate/config）。
-- **宿主全框架 vendor 下跑测的环境差异**：bootstrap 的 Capsule 最小容器未绑 `db.schema`（全套 Laravel 才有该绑定），2026-11-01 实测 47 用例 25 绿 / 22 错——错误全部为该绑定缺失，非代码缺陷；bootstrap 补 `db.schema` 绑定即可全绿（开发侧待收口）。
+- **tests/ 已建**（2026-11-01 并入并补齐）：Unit 6 只（ColumnType / DbCheckRegistry / DbDriver / TableCheckLogic / MysqlAdapter / FieldCheckLogic）+ Integration 4 只（SQLite 全链：建表比对修复 / 固定数据 / **删除验证** / 字段明细）+ Fixtures 10 只，**98 用例全绿**。运行：`composer test`，或 `phpunit --bootstrap tests/bootstrap.php tests`（需 standalone vendor——require-dev 含 phpunit 与 illuminate/config；data provider 已改静态写法，phpunit 9.6/11 通用）。
+- **宿主全框架 vendor 下跑测**：TestCase 已绑 `db.schema`（全套 Laravel 才有的绑定），最小容器可直接跑全绿；autoload-dev 的 Tests 命名空间在宿主 vendor 需 dump-autoload 刷新或测试引导手动补映射。
 - 未逐行精读：CheckInfoCommand 交互主循环 handle() 全分支。

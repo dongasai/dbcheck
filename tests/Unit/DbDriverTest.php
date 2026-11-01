@@ -17,7 +17,7 @@ class DbDriverTest extends TestCase
     /**
      * @return array<string, array{0: string, 1: class-string}>
      */
-    public function aliasProvider(): array
+    public static function aliasProvider(): array
     {
         return [
             'mysql' => ['mysql', Mysql8Adapter::class],
