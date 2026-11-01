@@ -2,7 +2,7 @@
 
 > 数据库结构/数据自检与修复框架：按表声明「最终结构 + 固定数据」，自动比对实际库差异并驱动修复。
 >
-> 包类型 `library` · PHP >=7.4 · illuminate 8–12 · doctrine/dbal · 经 composer extra.laravel.providers 自动发现
+> 包类型 `library` · PHP >=7.4 · illuminate 8–13 · 经 composer extra.laravel.providers 自动发现（doctrine/dbal 已移除：包源码零使用，Laravel 10+ 原生 `change()` 无需 dbal）
 
 _初始化：2026-11-01 00:56 · 全量扫描 21/21 文件_
 
