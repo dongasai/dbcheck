@@ -120,7 +120,7 @@ class DataDeleteSqliteTest extends TestCase
                 return [];
             }
 
-            protected static function deleteExtra(): bool
+            public static function deleteExtra(): bool
             {
                 return true;
             }

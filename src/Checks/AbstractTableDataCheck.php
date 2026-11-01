@@ -76,7 +76,7 @@ abstract class AbstractTableDataCheck implements DbCheckInterface
      *  - fix('data.extra.<身份JSON>') 按身份列等值删除该行（null 值走 whereNull）；
      *  - 检查器默认归入 DbCheckGroup::DELETE 分组（需 --group=delete 显式触发）。
      */
-    protected static function deleteExtra(): bool
+    public static function deleteExtra(): bool
     {
         return false;
     }

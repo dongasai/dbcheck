@@ -4,7 +4,7 @@
 >
 > 包类型 `library` · PHP >=7.4 · illuminate 8–13 · 经 composer extra.laravel.providers 自动发现（doctrine/dbal 已移除：包源码零使用，Laravel 10+ 原生 `change()` 无需 dbal）
 
-_初始化：2026-11-01 00:56 · 最近全量校对：2026-11-01（并入 SQLite 适配器 / `--check=db` / tests/ 后）_
+_初始化：2026-11-01 00:56 · 最近全量校对：2026-11-01（并入 SQLite 适配器 / `--check=db` / tests/ / 删除验证 + `dbcheck:delete` 后）_
 
 ## 架构总览
 
@@ -12,6 +12,7 @@ _初始化：2026-11-01 00:56 · 最近全量校对：2026-11-01（并入 SQLite
 flowchart TD
     subgraph Commands["Console/Commands 入口"]
         CHECK["dbcheck:check 自检 + 修复"]
+        DELETE["dbcheck:delete 多余行清理"]
         INIT["dbcheck:init 发布配置"]
         SKILL["dbcheck:skill 注册 agent skill"]
     end
@@ -39,6 +40,7 @@ flowchart TD
     COMPAT["DatabaseCompat 驱动类型 + 兼容插入"]
 
     CHECK --> REG
+    DELETE -- deleteExtra 能力收集 --> DATA
     REG --> TABLE & DATA & FIELD
     TABLE -- 建表与比对 --> FACTORY
     FACTORY --> DBDRIVER
@@ -56,6 +58,8 @@ flowchart TD
 ```
 
 **主链路**：`dbcheck:check` →（可选 `--check=db`：连接/驱动类型/适配器/版本/表数量自检，默认只读）→ `DbCheckRegistry`（自动发现/过滤）→ `grouped()` 按三类定序（表结构 → 固定数据 → 字段明细）→ 逐检查器 `check()` 报异常项 → 交互确认（`preview()` 以 pretend 模式出 SQL）→ `fix($key)` 修复 → 复检至全绿。
+
+**删除链路**：`dbcheck:delete` 按「能力」（`deleteExtra() = true`）收集 DataCheck（不受分组过滤影响）→ 只取 `data.extra.*` 多余行项 → 交互逐条确认 / `--yes` 免确认 → 按身份等值 DELETE → 复检。
 
 ## 核心概念
 
@@ -83,7 +87,7 @@ flowchart TD
 | src/Checks/ | [AGENTS.md](src/Checks/AGENTS.md) | 三类检查抽象基类（核心） |
 | src/Adapters/ | [AGENTS.md](src/Adapters/AGENTS.md) | 数据库类型判断（DbDriver）+ MySQL/MySQL8/PG/SQLite 驱动适配 |
 | src/Support/ | [AGENTS.md](src/Support/AGENTS.md) | 注册表 + 列类型常量 + 数据库兼容工具（DatabaseCompat） |
-| src/Console/Commands/ | [AGENTS.md](src/Console/Commands/AGENTS.md) | 三条 artisan 命令 |
+| src/Console/Commands/ | [AGENTS.md](src/Console/Commands/AGENTS.md) | 四条 artisan 命令（check / delete / init / skill） |
 | resources/skill/dbcheck/ | —（SKILL.md 即指南） | agent 引导 skill，经 dbcheck:skill 注册到宿主项目 |
 
 ## 全局规范

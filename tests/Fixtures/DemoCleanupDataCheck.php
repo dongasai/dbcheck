@@ -30,7 +30,7 @@ class DemoCleanupDataCheck extends AbstractTableDataCheck
         ];
     }
 
-    protected static function deleteExtra(): bool
+    public static function deleteExtra(): bool
     {
         return true;
     }

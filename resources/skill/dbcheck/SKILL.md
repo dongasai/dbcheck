@@ -214,6 +214,9 @@ DataCheck 覆盖 `deleteExtra(): true`（删除验证——删除未声明的多
 子类覆盖 `group()` 后以子类为准。**只允许在数据全量受声明控制的字典/固定表上开启**，
 业务表开启会把正常业务数据当多余行删掉。
 
+`dbcheck:delete` 是删除验证检查器的专用触发入口：按 `deleteExtra()` 能力收集（不受分组过滤影响），
+逐条预览 DELETE SQL 确认后清理多余行，无需 `--group=delete`。
+
 ## 命令
 
 ```bash
@@ -226,6 +229,9 @@ php artisan dbcheck:check --connection=mysql    # 指定数据库连接名（默
 php artisan dbcheck:check --fix-flow=inline     # 边查边修（每个检查器查完即逐条确认修复；默认 batch=先全量报告）
 php artisan dbcheck:check --check=db            # 数据库自检：连接/驱动类型/适配器/版本/表数量（默认只读）
 php artisan dbcheck:check --check=all --detail --db-write  # 库自检 + 结构数据检查；含连接参数与临时表读写测试
+php artisan dbcheck:delete                      # 删除验证：清理开启 deleteExtra 的检查器中未声明的多余数据行（逐条确认）
+php artisan dbcheck:delete --yes                # 免确认直接删除全部报告的多余行
+php artisan dbcheck:delete --no-interaction     # 只报告多余行，零变更（退出码非 0）
 ```
 
 ## 边界

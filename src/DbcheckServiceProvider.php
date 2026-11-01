@@ -3,6 +3,7 @@
 namespace Dongasai\Dbcheck;
 
 use Dongasai\Dbcheck\Console\Commands\CheckInfoCommand;
+use Dongasai\Dbcheck\Console\Commands\DbcheckDeleteCommand;
 use Dongasai\Dbcheck\Console\Commands\DbcheckInitCommand;
 use Dongasai\Dbcheck\Console\Commands\DbcheckSkillCommand;
 use Illuminate\Support\ServiceProvider;
@@ -34,6 +35,7 @@ class DbcheckServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 CheckInfoCommand::class,
+                DbcheckDeleteCommand::class,
                 DbcheckInitCommand::class,
                 DbcheckSkillCommand::class,
             ]);
