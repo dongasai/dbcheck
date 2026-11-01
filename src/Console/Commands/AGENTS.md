@@ -46,8 +46,8 @@ Registry::grouped() 三类定序（表结构 → 固定数据 → 字段明细�
 
 ## dbcheck:skill 细节
 
-- **交互多选**（Symfony ChoiceQuestion + multiselect）：可 `0,2` 逗号分隔多选；快捷项「全部目录」「自定义路径」；默认选中 `.agent/skills`（不在候选时默认「全部目录」）。
-- 候选探测：项目根 6 层内找名为 skills/skill 的目录，排除 vendor/node_modules/.git/public/storage 与包自身资源目录；内置候选 `.agent/skills` 置顶。
+- **交互多选**（Symfony ChoiceQuestion + multiselect）：可 `0,2` 逗号分隔多选；快捷项「全部目录」「自定义路径」；默认选中 `.agents/skills`（不在候选时默认「全部目录」）。
+- 候选探测：项目根 6 层内找名为 skills/skill 的目录，排除 vendor/node_modules/.git/public/storage 与包自身资源目录；内置候选 `.agents/skills`（生态通用惯例，Codex/Amp 在用）置顶。
 - `--dir=*` 非交互（可多次）；`--list` 只列不注册；`--force` 覆盖。
 - 写入 `<目标>/dbcheck/SKILL.md`，已存在默认跳过。
 

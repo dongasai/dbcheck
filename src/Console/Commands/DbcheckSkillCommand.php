@@ -44,9 +44,12 @@ class DbcheckSkillCommand extends Command
     /**
      * 内置默认候选目录（始终作为候选项，且交互时默认选中第一个）。
      *
+     * 取生态通用惯例 `.agents/skills`（OpenAI Codex / Amp 等在用；Agent Skills
+     * 开放标准只定义文件格式不定义安装路径）；已有目录仍按 dirNames 自动探测。
+     *
      * @var array<int, string>
      */
-    protected $defaultDirs = ['.agent/skills'];
+    protected $defaultDirs = ['.agents/skills'];
 
     /**
      * 排除的目录。
