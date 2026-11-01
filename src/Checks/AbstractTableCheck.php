@@ -220,15 +220,16 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
         }
 
         $actualIdx = $adapter->actualIndexes($conn, $table);
+        $strictIndex = $adapter->comparesIndexAttributes();
 
         foreach (static::indexes() as $name => $idx) {
             $cols = (array) ($idx['columns'] ?? []);
             $unique = !empty($idx['unique']);
 
             if (isset($actualIdx[$name])) {
-                if ($adapter->comparesIndexAttributes()) {
+                if ($strictIndex) {
                     $ai = $actualIdx[$name];
-                    if ($ai['unique'] === $unique && $ai['columns'] === $cols) {
+                    if (static::indexEquivalent($ai, $cols, $unique, true)) {
                         continue;
                     }
                     $issues[] = [
@@ -249,7 +250,7 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
                 if ($an === 'PRIMARY') {
                     continue;
                 }
-                if ($ai['unique'] === $unique && $ai['columns'] === $cols) {
+                if (static::indexEquivalent($ai, $cols, $unique, $strictIndex)) {
                     $equivalent = true;
                     break;
                 }
@@ -279,7 +280,7 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
             foreach (static::indexes() as $idx) {
                 $cols = (array) ($idx['columns'] ?? []);
                 $unique = !empty($idx['unique']);
-                if ($ai['unique'] === $unique && $ai['columns'] === $cols) {
+                if (static::indexEquivalent($ai, $cols, $unique, $strictIndex)) {
                     $equivalent = true;
                     break;
                 }
@@ -298,6 +299,35 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
         }
 
         return $issues;
+    }
+
+    /**
+     * 实际索引是否与声明「类型 + 字段」等价。
+     *
+     * MySQL 系比较列顺序（最左前缀有意义）；存在性模式（PG 等）忽略列顺序，
+     * 避免同名等价索引只因列顺序不同被误报为缺失 / 额外。
+     *
+     * @param array<string, mixed> $actual 实际索引（unique / columns）
+     * @param array<int, string> $columns 声明的索引列
+     */
+    protected static function indexEquivalent(array $actual, array $columns, bool $unique, bool $strict): bool
+    {
+        if ((bool) ($actual['unique'] ?? false) !== $unique) {
+            return false;
+        }
+
+        $actualColumns = array_values((array) ($actual['columns'] ?? []));
+        $expectedColumns = array_values($columns);
+        if ($actualColumns === [] || $expectedColumns === []) {
+            return false;
+        }
+
+        if (!$strict) {
+            sort($actualColumns);
+            sort($expectedColumns);
+        }
+
+        return $actualColumns === $expectedColumns;
     }
 
     /**

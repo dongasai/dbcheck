@@ -48,6 +48,13 @@ abstract class AbstractTableFieldCheck implements DbCheckInterface
      *  - where：定位行
      *  - columns：列名 => 标量（锁定为此值）或 数组（JSON 列，校验声明项齐全）
      *
+     * 数组值支持两种写法（等价，二选一）：
+     *  - list + 每项带 key：[['key' => 'a', 'name' => 'A'], ['key' => 'b', ...]]
+     *  - map：[ 'a' => ['key' => 'a', 'name' => 'A'], 'b' => [...] ]
+     *
+     * 补项语义：list 声明 + list 落库时追加到末尾（保留已存项及运行期状态，如 checked）；
+     * 其余情况按项 key 写回。已存 JSON 为 list（元素带 key）或 map 都能识别。
+     *
      * @return array<string, array<string, mixed>>
      */
     abstract protected static function rows(): array;
@@ -101,10 +108,9 @@ abstract class AbstractTableFieldCheck implements DbCheckInterface
                 $actualVal = $row->{$col};
 
                 if (is_array($expected)) {
-                    $arr = is_string($actualVal) ? json_decode($actualVal, true) : (array) $actualVal;
-                    $arr = is_array($arr) ? $arr : [];
-                    foreach ($expected as $itemKey => $itemDef) {
-                        if (!array_key_exists($itemKey, $arr)) {
+                    $stored = static::indexStoredItems($actualVal);
+                    foreach (static::declaredItems($expected) as $itemKey => $itemDef) {
+                        if (!array_key_exists($itemKey, $stored)) {
                             $issues[] = [
                                 'key' => "item.{$key}.{$col}.{$itemKey}",
                                 'type' => 'item',
@@ -151,7 +157,8 @@ abstract class AbstractTableFieldCheck implements DbCheckInterface
                 throw new LogicException('列 ' . $col . ' 非标量或已声明');
             }
             $expected = $def['columns'][$col];
-            DB::connection($conn)->table($table)->where((array) ($def['where'] ?? []))->update([$col => $expected]);
+            $data = [$col => $expected] + static::touchedAt();
+            DB::connection($conn)->table($table)->where((array) ($def['where'] ?? []))->update($data);
 
             return;
         }
@@ -162,21 +169,39 @@ abstract class AbstractTableFieldCheck implements DbCheckInterface
             if ($def === null) {
                 throw new LogicException('未知行: ' . $rowKey);
             }
-            if (!isset($def['columns'][$col]) || !is_array($def['columns'][$col])) {
+            $declared = $def['columns'][$col] ?? null;
+            if (!is_array($declared)) {
                 throw new LogicException('列 ' . $col . ' 非数组');
             }
-            if (!isset($def['columns'][$col][$itemKey])) {
+
+            $items = static::declaredItems($declared);
+            if (!array_key_exists($itemKey, $items)) {
                 throw new LogicException('未声明项: ' . $itemKey);
             }
+
             $row = static::findRow((array) ($def['where'] ?? []));
             if ($row === null) {
                 throw new LogicException('行不存在');
             }
-            $arr = is_string($row->{$col}) ? json_decode($row->{$col}, true) : (array) $row->{$col};
-            $arr = is_array($arr) ? $arr : [];
-            $arr[$itemKey] = $def['columns'][$col][$itemKey];
+
+            $stored = is_string($row->{$col}) ? json_decode($row->{$col}, true) : $row->{$col};
+            $stored = is_array($stored) ? $stored : [];
+
+            if (array_key_exists($itemKey, static::indexStoredItems($stored))) {
+                return;
+            }
+
+            if (static::isListArray($declared) && static::isListArray($stored)) {
+                // list 声明 + list 落库：追加到末尾，保留已存项及其运行期状态（如 checked）
+                $stored[] = $items[$itemKey];
+            } else {
+                $stored[$itemKey] = $items[$itemKey];
+            }
+
             DB::connection($conn)->table($table)->where((array) ($def['where'] ?? []))
-                ->update([$col => json_encode($arr, JSON_UNESCAPED_UNICODE)]);
+                ->update([
+                    $col => json_encode($stored, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                ] + static::touchedAt());
 
             return;
         }
@@ -205,6 +230,90 @@ abstract class AbstractTableFieldCheck implements DbCheckInterface
     protected static function findRow(array $where)
     {
         return DB::connection(static::connectionName())->table(static::table())->where($where)->first();
+    }
+
+    /**
+     * 归一化数组列声明为「项 key => 项定义」。
+     *
+     * 兼容两种写法：
+     *  - list + 每项带 key：`[['key'=>'a', ...], ['key'=>'b', ...]]`（v338 口径）
+     *  - map：`['a' => [...], 'b' => [...]]`
+     *
+     * @param array<int|string, mixed> $declared
+     * @return array<string, mixed>
+     */
+    protected static function declaredItems(array $declared): array
+    {
+        if (!static::isListArray($declared)) {
+            /** @var array<string, mixed> $declared */
+            return $declared;
+        }
+
+        $items = [];
+        foreach ($declared as $item) {
+            if (!is_array($item) || !isset($item['key'])) {
+                // 不是 list + key 写法：按 map 语义原样返回
+                return $declared;
+            }
+            $items[(string) $item['key']] = $item;
+        }
+
+        return $items;
+    }
+
+    /**
+     * 按项 key 索引已存 JSON 列。
+     *
+     * 兼容两种落库形态：list（元素带 key，取元素 key 作下标）与 map（直接用键）。
+     * 无法解析或元素缺 key 时按原样返回，交由调用方判缺失。
+     *
+     * @param mixed $raw
+     * @return array<string, mixed>
+     */
+    protected static function indexStoredItems($raw): array
+    {
+        $decoded = is_string($raw) ? json_decode($raw, true) : $raw;
+        if (!is_array($decoded) || $decoded === []) {
+            return [];
+        }
+
+        if (!static::isListArray($decoded)) {
+            /** @var array<string, mixed> $decoded */
+            return $decoded;
+        }
+
+        $items = [];
+        foreach ($decoded as $item) {
+            if (is_array($item) && isset($item['key'])) {
+                $items[(string) $item['key']] = $item;
+            }
+        }
+
+        return $items;
+    }
+
+    /**
+     * 是否为 list（连续 0..n-1 下标）数组（PHP 7.4 无 array_is_list）。
+     *
+     * @param array<mixed> $arr
+     */
+    protected static function isListArray(array $arr): bool
+    {
+        return $arr !== [] && array_keys($arr) === range(0, count($arr) - 1);
+    }
+
+    /**
+     * 需要一并回写的时间列（表里没有 updated_at 时不写，避免未知列报错）。
+     *
+     * @return array<string, mixed>
+     */
+    protected static function touchedAt(): array
+    {
+        if (!Schema::connection(static::connectionName())->hasColumn(static::table(), 'updated_at')) {
+            return [];
+        }
+
+        return ['updated_at' => now()];
     }
 
     /**

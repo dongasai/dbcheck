@@ -14,7 +14,7 @@ Registry::grouped() 三类定序（表结构 → 固定数据 → 字段明细�
 
 - **batch（默认）**：全量检查完 → 汇总「发现 N 个异常」+ 明细 → 交互逐条 fixIssue()（预览 SQL → 确认 → fix → 复检）；非交互 previewAll() 后返回 FAILURE。
 - **inline（--fix-flow=inline，仅交互）**：每个检查器查完若有异常立即 fixIssue()，再查下一个；结束汇总处理数与失败数。
-- **容错**：单个检查器 `check()` 抛错只记「检查失败」并继续（不中断整体自检），末尾汇总带失败数；`preview()` 抛错只 warn 并继续确认；非交互模式下可选处理项（额外列/索引）提示「默认不处理」。
+- **容错**：单个检查器 `check()` 抛错只记「检查失败」并继续（不中断整体自检），末尾汇总带失败数；`preview()` 抛错只 warn 并继续确认；非交互模式下可选处理项（额外列/索引）提示「默认不处理」；`--check` 只接受 `fields`，其它值按失败返回（避免被当成"检查通过"）。
 - SQL 预览经 formatSql()（内联绑定 + prettySql 关键字换行排版）；previewSql() / fixIssue() / previewAll() / runInline() 为流程拆分。
 
 ## dbcheck:skill 细节

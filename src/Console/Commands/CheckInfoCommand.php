@@ -86,9 +86,10 @@ class CheckInfoCommand extends Command
 
         $check = (string) $this->option('check');
         if ($check !== 'fields') {
-            $this->warn('暂仅支持 --check=fields');
+            // 不支持的检查项按失败处理：返回 SUCCESS 会被 CI/脚本误判为"已检查且通过"
+            $this->error('暂仅支持 --check=fields（当前: ' . ($check !== '' ? $check : '空') . '）');
 
-            return self::SUCCESS;
+            return self::FAILURE;
         }
 
         $noInteraction = (bool) $this->option('no-interaction');

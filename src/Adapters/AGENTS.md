@@ -13,7 +13,7 @@
 | AdapterFactory.php | 稳定入口：转发 DbDriver::adapter()（可传第二参 $override 显式指定），保持检查器调用面不变 |
 | MysqlAdapter.php | MySQL 5.7 等无原生 JSON：json → longText；列/索引属性精确比对；表编码读取（information_schema.TABLES + COLLATIONS）；ENUM 建列/期望类型按 `enum('a','b')` 口径 |
 | Mysql8Adapter.php | 仅覆盖 json 差异：原生 JSON 类型；继承 MysqlAdapter |
-| PgsqlAdapter.php | 无 unsigned 概念（unsigned* 回落有符号）、tinyInteger→smallint、原生 boolean、comment 忽略、CURRENT_TIMESTAMP 编译为 PG 关键字；**仅存在性比对**，主键索引（{table}_pkey）不参与；覆写 actualColumns()：PG 的 TABLE_SCHEMA 是 schema 名（public 等）不是库名，故按表名跨 schema 匹配并排除系统 schema |
+| PgsqlAdapter.php | 无 unsigned 概念（unsigned* 回落有符号）、tinyInteger→smallint、原生 boolean、comment 忽略、CURRENT_TIMESTAMP 编译为 PG 关键字；**仅存在性比对**，主键索引（{table}_pkey）不参与；覆写 `actualColumns()`（按表名跨 schema 匹配、排除系统 schema）与 `resolveIndexName()`（名字被别的表占用才改 `{table}_{名}`）；索引列从 `pg_get_indexdef` 文本解析（去排序/opclass 修饰） |
 
 ## 要点
 

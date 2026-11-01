@@ -112,6 +112,39 @@ public static function indexes(): array
 }
 ```
 
+## 固定数据 / 字段明细声明
+
+`DataCheck::rows()`（固定数据）每项：
+
+```php
+'document_center' => [
+    'where'        => ['key' => '/document-center'],   // 判定条件，补插时同时作为字段
+    'insert'       => ['title' => '文件中心', 'btn_list' => [/* 数组会编码成 JSON */]],
+    'item'         => 'admin_menu（key=/document-center）',
+    'problem'      => '菜单缺失，前端无入口',
+    'fix'          => '插入菜单 文件中心',
+    'insert_merge' => [                                // 运行期才能算出的列
+        'parent_id' => ['where' => ['key' => 'parent'], 'value' => 'id'],
+    ],
+    'timestamps'   => false,                           // 可选，默认 true（不写 created_at/updated_at）
+],
+```
+
+`FieldCheck::rows()`（字段明细）只锁定显式声明的字段（其余后台可自由调整）；数组列支持两种等价写法：
+
+```php
+'btn_list' => [                                  // list + 每项带 key
+    ['key' => 'document-center-shou-edit', 'name' => '编辑', 'checked' => false],
+],
+'btn_list' => [                                  // map：项 key => 项定义
+    'document-center-shou-edit' => ['key' => 'document-center-shou-edit', 'name' => '编辑'],
+],
+```
+
+- 标量不一致报 `field.<标识>.<列>`，修复回写声明值；
+- 数组缺项报 `item.<标识>.<列>.<项key>`；list 声明 + list 落库时补项**追加**（已存项与 `checked` 等运行期状态保留）；
+- 已存 JSON 是 list（元素带 `key`）或 map 都能识别；行不存在时跳过（由 DataCheck 报缺行）。
+
 ## 表编码声明（可选）
 
 默认不声明 = 建表用连接默认字符集，且**不比对**表编码。声明了（任一非 null）就比对：
