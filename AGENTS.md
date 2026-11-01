@@ -4,7 +4,7 @@
 >
 > 包类型 `library` · PHP >=7.4 · illuminate 8–13 · 经 composer extra.laravel.providers 自动发现（doctrine/dbal 已移除：包源码零使用，Laravel 10+ 原生 `change()` 无需 dbal）
 
-_初始化：2026-11-01 00:56 · 全量扫描 23/23 文件_
+_初始化：2026-11-01 00:56 · 最近全量校对：2026-11-01（并入 SQLite 适配器 / `--check=db` / tests/ 后）_
 
 ## 架构总览
 
@@ -103,5 +103,6 @@ flowchart TD
 
 ## 测试与已知缺口
 
-- **本包无 Tests 目录**（零自动化测试）——建议补：ColumnType / DbCheckRegistry 单测 + 四基类 sqlite 集成测。
-- 签名级覆盖、未逐行精读：AbstractTableCheck::check()/fix() 实现细节、MysqlAdapter::actualIndexes()、CheckInfoCommand 交互主循环 handle()。
+- **tests/ 已建**（2026-11-01 并入）：Unit 6 只（ColumnType / DbCheckRegistry / DbDriver / TableCheckLogic / MysqlAdapter / FieldCheckLogic）+ Integration 3 只（SQLite 全链：建表比对修复 / 固定数据 / 字段明细）+ Fixtures 9 只。运行：`composer test`，或 `phpunit --bootstrap tests/bootstrap.php tests`（需 standalone vendor——require-dev 含 phpunit 与 illuminate/config）。
+- **宿主全框架 vendor 下跑测的环境差异**：bootstrap 的 Capsule 最小容器未绑 `db.schema`（全套 Laravel 才有该绑定），2026-11-01 实测 47 用例 25 绿 / 22 错——错误全部为该绑定缺失，非代码缺陷；bootstrap 补 `db.schema` 绑定即可全绿（开发侧待收口）。
+- 未逐行精读：CheckInfoCommand 交互主循环 handle() 全分支。
