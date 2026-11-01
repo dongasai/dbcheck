@@ -360,8 +360,7 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
         $conn = static::connectionName();
         $adapter = AdapterFactory::make($conn);
 
-        $prefix = substr($key, 0, 7);
-        if ($prefix === 'column.') {
+        if (strpos($key, 'column.') === 0) {
             $name = substr($key, 7);
             $def = static::columns()[$name] ?? null;
             if ($def === null) {
@@ -378,7 +377,7 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
             return;
         }
 
-        if ($prefix === 'index.') {
+        if (strpos($key, 'index.') === 0) {
             $name = substr($key, 6);
             $idx = static::indexes()[$name] ?? null;
             if ($idx === null) {
@@ -402,8 +401,7 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
             return;
         }
 
-        if ($prefix === 'extra_c') {
-            // extra_column.
+        if (strpos($key, 'extra_column.') === 0) {
             $name = substr($key, 13);
             if (isset(static::columns()[$name])) {
                 throw new LogicException('拒绝删除已声明列: ' . $name);
@@ -415,8 +413,7 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
             return;
         }
 
-        if ($prefix === 'extra_i') {
-            // extra_index.
+        if (strpos($key, 'extra_index.') === 0) {
             $name = substr($key, 12);
             if (isset(static::indexes()[$name])) {
                 throw new LogicException('拒绝删除已声明索引: ' . $name);

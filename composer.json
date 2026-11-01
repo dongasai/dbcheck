@@ -11,10 +11,22 @@
         "illuminate/support": "^8.0 || ^9.0 || ^10.0 || ^11.0 || ^12.0",
         "doctrine/dbal": "^2.0 || ^3.0 || ^4.0"
     },
+    "require-dev": {
+        "illuminate/config": "^8.0 || ^9.0 || ^10.0 || ^11.0 || ^12.0",
+        "phpunit/phpunit": "^9.6"
+    },
     "autoload": {
         "psr-4": {
             "Dongasai\\Dbcheck\\": "src/"
         }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Dongasai\\Dbcheck\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
     },
     "extra": {
         "laravel": {

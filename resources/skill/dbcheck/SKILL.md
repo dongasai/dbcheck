@@ -178,15 +178,16 @@ protected static function collation(): ?string
 
 数据库类型判断由 `Dongasai\Dbcheck\Adapters\DbDriver` 负责：默认**按连接检查判断**自动选择，
 适配器映射不做配置化硬编码；例外用运行参数覆盖。选择优先级：
-**显式参数**（`AdapterFactory::make($connection, $override)`）→ **运行期覆盖**（`DbDriver::override('mysql57')` 或命令行 `--adapter=`）→ **自动探测**（mysql/mariadb → Mysql8Adapter，pgsql/postgres → PgsqlAdapter）。
+**显式参数**（`AdapterFactory::make($connection, $override)`）→ **运行期覆盖**（`DbDriver::override('mysql57')` 或命令行 `--adapter=`）→ **自动探测**（mysql/mariadb → Mysql8Adapter，pgsql/postgres → PgsqlAdapter，sqlite → SqliteAdapter）。
 
 | 适配器 | 适用 | 特点 |
 |--------|------|------|
 | `Mysql8Adapter` | MySQL 8+（自动探测默认） | json 原生类型 |
 | `MysqlAdapter` | 5.7 等旧版 | json 落 longText |
 | `PgsqlAdapter` | PG / PG 系 | unsigned 回落、boolean 原生、忽略 comment、仅存在性比对 |
+| `SqliteAdapter` | SQLite（本地/测试） | 列仅存在性比对（动态类型）、索引仍精确比对、无表编码 |
 
-驱动别名：`mysql8` / `mysql` / `mariadb` / `mysql57` / `pgsql` / `postgres`（也可用适配器类名）。
+驱动别名：`mysql8` / `mysql` / `mariadb` / `mysql57` / `pgsql` / `postgres` / `sqlite`（也可用适配器类名）。
 
 ```bash
 php artisan dbcheck:check --adapter=mysql57   # 5.7 等无原生 JSON 的旧版本，运行期覆盖驱动
@@ -215,6 +216,8 @@ php artisan dbcheck:check --group=testdata      # 只跑指定分组
 php artisan dbcheck:check --all-groups          # 跑全部分组
 php artisan dbcheck:check --connection=mysql    # 指定数据库连接名（默认用 database.default；显式声明连接的检查器不受影响）
 php artisan dbcheck:check --fix-flow=inline     # 边查边修（每个检查器查完即逐条确认修复；默认 batch=先全量报告）
+php artisan dbcheck:check --check=db            # 数据库自检：连接/驱动类型/适配器/版本/表数量（默认只读）
+php artisan dbcheck:check --check=all --detail --db-write  # 库自检 + 结构数据检查；含连接参数与临时表读写测试
 ```
 
 ## 边界

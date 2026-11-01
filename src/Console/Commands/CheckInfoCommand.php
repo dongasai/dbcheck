@@ -3,8 +3,12 @@
 namespace Dongasai\Dbcheck\Console\Commands;
 
 use Dongasai\Dbcheck\Adapters\DbDriver;
+use Dongasai\Dbcheck\Support\DatabaseCompat;
 use Dongasai\Dbcheck\Support\DbCheckRegistry;
 use Illuminate\Console\Command;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * 数据库自检与修复命令。
@@ -12,11 +16,18 @@ use Illuminate\Console\Command;
  * 用法：
  *   php artisan dbcheck:check                    # 交互：逐项询问是否修复（先看 SQL 再确认）
  *   php artisan dbcheck:check --no-interaction  # 只报告，不执行任何变更
+ *   php artisan dbcheck:check --check=db         # 只做数据库连接/类型/适配器自检（默认只读）
+ *   php artisan dbcheck:check --check=all --detail --db-write  # 库自检 + 结构/数据检查，含连接参数与读写测试
  *   php artisan dbcheck:check --group=testdata  # 只执行 testdata 分组（即播种测试数据）
  *   php artisan dbcheck:check --all-groups      # 执行全部分组（含测试数据）
  *   php artisan dbcheck:check --connection=mysql # 指定数据库连接名（默认用 database.default 默认连接）
  *   php artisan dbcheck:check --adapter=mysql57  # 指定驱动适配器（类名或驱动别名；默认按数据库类型自动探测）
  *   php artisan dbcheck:check --fix-flow=inline  # 边查边修：每个检查器查完即逐条确认修复（默认 batch：先全量报告）
+ *
+ * 检查项（--check，可逗号组合）：
+ *  - fields：三类检查器（默认）；
+ *  - db：连接名/驱动类型/适配器/库名/版本/表数量 + 只读查询；--db-write 追加临时表读写自检；
+ *  - all：两者都跑。
  *
  * 分组：检查器通过 group() 自行声明分组名（任意字符串，框架不预置）；
  * group() 返回 null 表示常规检查（默认执行），返回非空字符串表示分组检查
@@ -27,7 +38,7 @@ use Illuminate\Console\Command;
  * 适配器：--adapter 运行期覆盖驱动选择（DbDriver::override），默认按数据库类型检查判断。
  * 修复节奏：--fix-flow=batch（默认）先全量报告再逐条确认修复；--fix-flow=inline 边查边修（仅交互模式生效）。
  *
- * 执行顺序：表结构 → 固定数据 → 字段明细（按 DbCheckRegistry::grouped()）。
+ * 执行顺序：数据库检查（若启用）→ 表结构 → 固定数据 → 字段明细（按 DbCheckRegistry::grouped()）。
  * 每张检查器返回异常项，交互模式下先预览 SQL 再确认执行，执行后自动复检。
  */
 class CheckInfoCommand extends Command
@@ -37,14 +48,22 @@ class CheckInfoCommand extends Command
      *
      * @var string
      */
-    protected $signature = 'dbcheck:check {--check=fields} {--connection= : 数据库连接名（默认用 database.default 默认连接）} {--adapter= : 驱动适配器（类名或驱动别名 mysql8/mysql/mariadb/mysql57/pgsql/postgres，默认自动探测）} {--fix-flow= : 修复节奏：batch=先全量报告后逐条修复（默认）；inline=边查边修（仅交互模式生效）} {--group=* : 只执行指定分组（可多次），如 --group=testdata} {--all-groups : 执行全部分组（含 testdata）}';
+    protected $signature = 'dbcheck:check
+        {--check=fields : 检查项：fields=表结构/固定数据/字段明细；db=数据库连接/类型/读写自检；all=两者都跑（可用逗号组合，如 fields,db）}
+        {--connection= : 数据库连接名（默认用 database.default 默认连接）}
+        {--adapter= : 驱动适配器（类名或驱动别名 mysql8/mysql/mariadb/mysql57/pgsql/postgres/sqlite，默认自动探测）}
+        {--fix-flow= : 修复节奏：batch=先全量报告后逐条修复（默认）；inline=边查边修（仅交互模式生效）}
+        {--group=* : 只执行指定分组（可多次），如 --group=testdata}
+        {--all-groups : 执行全部分组（含 testdata）}
+        {--detail : 详细输出（数据库检查打印连接参数）}
+        {--db-write : 数据库检查时执行临时表读写自检（会建/删临时表；默认只读）}';
 
     /**
      * 命令描述。
      *
      * @var string
      */
-    protected $description = '数据库自检与修复（按表三类检查：表结构 / 固定数据 / 字段明细）';
+    protected $description = '数据库自检与修复（表结构 / 固定数据 / 字段明细，可选数据库连接与类型检查）';
 
     /**
      * 类别顺序与展示名。
@@ -84,12 +103,33 @@ class CheckInfoCommand extends Command
             DbDriver::override($adapter);
         }
 
-        $check = (string) $this->option('check');
-        if ($check !== 'fields') {
+        $checks = [];
+        foreach (explode(',', (string) $this->option('check')) as $item) {
+            $item = strtolower(trim($item));
+            if ($item !== '') {
+                $checks[] = $item;
+            }
+        }
+        if ($checks === []) {
+            $checks = ['fields'];
+        }
+
+        $unknown = array_values(array_diff($checks, ['fields', 'db', 'all']));
+        if ($unknown !== []) {
             // 不支持的检查项按失败处理：返回 SUCCESS 会被 CI/脚本误判为"已检查且通过"
-            $this->error('暂仅支持 --check=fields（当前: ' . ($check !== '' ? $check : '空') . '）');
+            $this->error('未知的 --check 值: ' . implode(',', $unknown) . '（支持 fields / db / all，可用逗号组合）');
 
             return self::FAILURE;
+        }
+
+        $runFields = in_array('all', $checks, true) || in_array('fields', $checks, true);
+        $runDb = in_array('all', $checks, true) || in_array('db', $checks, true);
+
+        // 数据库检查在最前面：连接/驱动类型不通时，后面的结构检查也没有意义
+        $dbErrors = $runDb ? $this->checkDatabase() : 0;
+
+        if (!$runFields) {
+            return $dbErrors > 0 ? self::FAILURE : self::SUCCESS;
         }
 
         $noInteraction = (bool) $this->option('no-interaction');
@@ -125,7 +165,9 @@ class CheckInfoCommand extends Command
 
         // inline：边查边修（每个检查器查完若有异常，立即逐条确认修复）；非交互无修复动作，统一走 batch 报告
         if ($flow === 'inline' && !$noInteraction) {
-            return $this->runInline($groups);
+            $inline = $this->runInline($groups);
+
+            return $dbErrors > 0 ? self::FAILURE : $inline;
         }
 
         $allIssues = [];
@@ -158,9 +200,9 @@ class CheckInfoCommand extends Command
         }
 
         if (empty($allIssues) && $failedChecks === 0) {
-            $this->info('全部检查通过，无异常。');
+            $this->info('结构/数据检查通过，无异常。');
 
-            return self::SUCCESS;
+            return $dbErrors > 0 ? self::FAILURE : self::SUCCESS;
         }
 
         $this->newLine();
@@ -188,7 +230,207 @@ class CheckInfoCommand extends Command
             }
         }
 
-        return $errorCount > 0 ? self::FAILURE : self::SUCCESS;
+        return ($errorCount + $dbErrors) > 0 ? self::FAILURE : self::SUCCESS;
+    }
+
+    /**
+     * 数据库检查：连接、驱动类型/适配器、库名、服务端版本、表数量、只读查询；
+     * --detail 追加连接参数，--db-write 追加临时表读写自检（结束必定清理）。
+     *
+     * @return int 失败项数
+     */
+    protected function checkDatabase(): int
+    {
+        $this->newLine();
+        $this->line('[数据库检查]');
+
+        $connectionName = (string) config('database.default');
+
+        try {
+            $connection = DB::connection();
+            $driver = DatabaseCompat::driver();
+            $database = (string) $connection->getDatabaseName();
+        } catch (\Throwable $e) {
+            $this->error('  ✗ 数据库连接失败: ' . $e->getMessage());
+
+            return 1;
+        }
+
+        $errors = 0;
+
+        $this->line('  • 连接: ' . ($connectionName !== '' ? $connectionName : '(default)'));
+        $this->line('  • 驱动类型: ' . $driver);
+        $this->line('  • 数据库: ' . ($database !== '' ? $database : '-'));
+
+        try {
+            $class = DbDriver::adapterClass(null);
+            $this->line('  • 适配器: ' . basename(str_replace('\\', '/', $class)));
+        } catch (\Throwable $e) {
+            $this->error('  ✗ 无可用驱动适配器: ' . $e->getMessage() . '（可用 --adapter= 指定）');
+            $errors++;
+        }
+
+        if ($this->option('detail')) {
+            $config = (array) config('database.connections.' . $connectionName, []);
+            $fields = [
+                'host' => '主机',
+                'port' => '端口',
+                'username' => '用户名',
+                'charset' => '字符集',
+                'collation' => '排序规则',
+            ];
+            foreach ($fields as $key => $label) {
+                $value = $config[$key] ?? null;
+                if ($value !== null && $value !== '') {
+                    $this->line('  • ' . $label . ': ' . $value);
+                }
+            }
+        }
+
+        try {
+            DB::connection()->select('SELECT 1');
+            $this->line('  ✓ 连接成功');
+        } catch (\Throwable $e) {
+            $this->error('  ✗ 连接失败: ' . $e->getMessage());
+
+            return $errors + 1;
+        }
+
+        $version = $this->databaseVersion();
+        if ($version !== null) {
+            $this->line('  • 服务端版本: ' . $version);
+        }
+
+        $tables = $this->databaseTableCount();
+        if ($tables !== null) {
+            $this->line('  • 表数量: ' . $tables);
+        }
+
+        if ($errors === 0 && $this->option('db-write')) {
+            $errors += $this->databaseWriteProbe();
+        }
+
+        if ($errors === 0) {
+            $this->info('  ✓ 数据库检查通过');
+        }
+
+        return $errors;
+    }
+
+    /**
+     * 服务端版本（按驱动取；取不到返回 null，不计失败）。
+     */
+    protected function databaseVersion(): ?string
+    {
+        try {
+            if (DatabaseCompat::isSqlite()) {
+                $row = DB::connection()->selectOne('select sqlite_version() as version');
+
+                return isset($row->version) ? (string) $row->version : null;
+            }
+            if (DatabaseCompat::isPostgreSQL()) {
+                $row = DB::connection()->selectOne('show server_version');
+
+                return isset($row->server_version) ? (string) $row->server_version : null;
+            }
+            $row = DB::connection()->selectOne('select version() as version');
+
+            return isset($row->version) ? (string) $row->version : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * 当前库的表数量（按驱动查系统表；取不到返回 null，不计失败）。
+     */
+    protected function databaseTableCount(): ?int
+    {
+        try {
+            if (DatabaseCompat::isSqlite()) {
+                $row = DB::connection()->selectOne(
+                    "select count(*) as total from sqlite_master where type = 'table' and name not like 'sqlite_%'"
+                );
+
+                return isset($row->total) ? (int) $row->total : null;
+            }
+            if (DatabaseCompat::isPostgreSQL()) {
+                $row = DB::connection()->selectOne(
+                    "select count(*) as total from information_schema.tables"
+                    . " where table_type = 'BASE TABLE'"
+                    . " and table_schema not in ('pg_catalog', 'information_schema')"
+                );
+
+                return isset($row->total) ? (int) $row->total : null;
+            }
+            $row = DB::connection()->selectOne(
+                'select count(*) as total from information_schema.tables where table_schema = database()'
+            );
+
+            return isset($row->total) ? (int) $row->total : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * 写能力自检：建临时表 → 插 → 查 → 改 → 删 → 清理（--db-write 才执行；结束时必定 drop）。
+     *
+     * @return int 失败项数
+     */
+    protected function databaseWriteProbe(): int
+    {
+        $table = 'dbcheck_probe_' . substr(md5(uniqid('', true)), 0, 8);
+        $errors = 0;
+
+        try {
+            Schema::connection(null)->create($table, function (Blueprint $blueprint) {
+                $blueprint->string('probe_value')->nullable();
+            });
+            $this->line('  ✓ 创建临时表成功');
+        } catch (\Throwable $e) {
+            $this->error('  ✗ 创建临时表失败: ' . $e->getMessage());
+
+            return 1;
+        }
+
+        try {
+            DB::table($table)->insert(['probe_value' => 'insert']);
+            if (DB::table($table)->where('probe_value', 'insert')->first() === null) {
+                $this->error('  ✗ 插入后查询不到数据');
+                $errors++;
+            } else {
+                $this->line('  ✓ 写入/查询成功');
+            }
+
+            DB::table($table)->where('probe_value', 'insert')->update(['probe_value' => 'update']);
+            if (DB::table($table)->where('probe_value', 'update')->first() === null) {
+                $this->error('  ✗ 更新后查询不到数据');
+                $errors++;
+            } else {
+                $this->line('  ✓ 更新成功');
+            }
+
+            DB::table($table)->where('probe_value', 'update')->delete();
+            if (DB::table($table)->where('probe_value', 'update')->first() !== null) {
+                $this->error('  ✗ 删除后数据仍存在');
+                $errors++;
+            } else {
+                $this->line('  ✓ 删除成功');
+            }
+        } catch (\Throwable $e) {
+            $this->error('  ✗ 读写测试失败: ' . $e->getMessage());
+            $errors++;
+        } finally {
+            try {
+                Schema::connection(null)->dropIfExists($table);
+                $this->line('  ✓ 清理临时表成功');
+            } catch (\Throwable $e) {
+                $this->warn('  ⚠ 清理临时表失败，请手动删除: ' . $table . '（' . $e->getMessage() . '）');
+            }
+        }
+
+        return $errors;
     }
 
     /**

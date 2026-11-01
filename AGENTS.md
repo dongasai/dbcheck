@@ -4,7 +4,7 @@
 >
 > 包类型 `library` · PHP >=7.4 · illuminate 8–12 · doctrine/dbal · 经 composer extra.laravel.providers 自动发现
 
-_初始化：2026-11-01 00:56 · 全量扫描 21/21 文件_
+_初始化：2026-11-01 00:56 · 全量扫描 23/23 文件_
 
 ## 架构总览
 
@@ -30,11 +30,13 @@ flowchart TD
         M8["Mysql8Adapter json 原生"]
         MY["MysqlAdapter json 转 longText"]
         PG["PgsqlAdapter 仅存在性比对"]
+        SQ["SqliteAdapter 存在性比对"]
         BASE["DatabaseAdapter 抽象基类"]
     end
 
     CFG["config/dbcheck.php scan + adapters"]
     CT["ColumnType 列类型常量"]
+    COMPAT["DatabaseCompat 驱动类型 + 兼容插入"]
 
     CHECK --> REG
     REG --> TABLE & DATA & FIELD
@@ -43,15 +45,17 @@ flowchart TD
     DBDRIVER --> M8
     DBDRIVER --> MY
     DBDRIVER --> PG
+    DBDRIVER --> SQ
     M8 -. 继承 .-> MY
     MY -. 继承 .-> BASE
     PG -. 继承 .-> BASE
+    SQ -. 继承 .-> MY
     INIT --> CFG
     CFG -. 扫描根 .-> REG
     CT -. 列声明 .-> TABLE
 ```
 
-**主链路**：`dbcheck:check` → `DbCheckRegistry`（自动发现/过滤）→ `grouped()` 按三类定序（表结构 → 固定数据 → 字段明细）→ 逐检查器 `check()` 报异常项 → 交互确认（`preview()` 以 pretend 模式出 SQL）→ `fix($key)` 修复 → 复检至全绿。
+**主链路**：`dbcheck:check` →（可选 `--check=db`：连接/驱动类型/适配器/版本/表数量自检，默认只读）→ `DbCheckRegistry`（自动发现/过滤）→ `grouped()` 按三类定序（表结构 → 固定数据 → 字段明细）→ 逐检查器 `check()` 报异常项 → 交互确认（`preview()` 以 pretend 模式出 SQL）→ `fix($key)` 修复 → 复检至全绿。
 
 ## 核心概念
 
@@ -69,7 +73,7 @@ flowchart TD
 - **异常项 key 命名**：`table` / `table.charset` / `column.<名>` / `index.<名>` / `extra_column.<名>` / `extra_index.<名>` / `data.<标识>` / `field.<标识>.<列>` / `item.<标识>.<列>.<项key>`。fix() 对未知 key 必须 LogicException。
 - **分组**：`group()` 返回 null = 常规（默认执行）；非空 = 分组检查（仅 `--group=<名>` / `--all-groups` 触发）。「seeder」语义 = 执行某分组的 row/field 检查。
 - **开关**：静态 `$enabled=false` 时自动发现跳过（手动 register() 不受影响）。
-- **比对深度由适配器决定**：MySQL/MySQL8 精确比对；PG 仅存在性（防误报）。
+- **比对深度由适配器决定**：MySQL/MySQL8 精确比对；PG / SQLite 仅存在性（防误报）。
 
 ## 模块索引
 
@@ -77,8 +81,8 @@ flowchart TD
 |------|------|------|
 | src/Contracts/ | [AGENTS.md](src/Contracts/AGENTS.md) | 检查器与结构声明契约 |
 | src/Checks/ | [AGENTS.md](src/Checks/AGENTS.md) | 三类检查抽象基类（核心） |
-| src/Adapters/ | [AGENTS.md](src/Adapters/AGENTS.md) | 数据库类型判断（DbDriver）+ MySQL/MySQL8/PG 驱动适配 |
-| src/Support/ | [AGENTS.md](src/Support/AGENTS.md) | 注册表 + 列类型常量 |
+| src/Adapters/ | [AGENTS.md](src/Adapters/AGENTS.md) | 数据库类型判断（DbDriver）+ MySQL/MySQL8/PG/SQLite 驱动适配 |
+| src/Support/ | [AGENTS.md](src/Support/AGENTS.md) | 注册表 + 列类型常量 + 数据库兼容工具（DatabaseCompat） |
 | src/Console/Commands/ | [AGENTS.md](src/Console/Commands/AGENTS.md) | 三条 artisan 命令 |
 | resources/skill/dbcheck/ | —（SKILL.md 即指南） | agent 引导 skill，经 dbcheck:skill 注册到宿主项目 |
 
