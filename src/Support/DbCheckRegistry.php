@@ -45,6 +45,15 @@ class DbCheckRegistry
     }
 
     /**
+     * 清空手动注册与发现缓存（测试用：重置静态状态，便于同一进程内重复构造场景）。
+     */
+    public static function clear(): void
+    {
+        static::$manual = [];
+        static::$discovered = null;
+    }
+
+    /**
      * 收集全部应执行的检查器（自动发现 + 手动注册，去重，过滤抽象/$enabled=false）。
      *
      * @return array<int, class-string<DbCheckInterface>>

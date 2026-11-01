@@ -135,6 +135,51 @@ class PgsqlAdapter extends DatabaseAdapter
         return strtolower($def['type'] ?? ColumnType::DEFAULT);
     }
 
+    /**
+     * 读取实际列结构（PG 专用实现）。
+     *
+     * PG 的 information_schema.COLUMNS.TABLE_SCHEMA 是 schema 名（public 等），
+     * 不是数据库名，因此不能像 MySQL 那样用 getDatabaseName() 过滤；
+     * 改为按表名（大小写不敏感）跨 schema 匹配并排除系统 schema，
+     * 避免多 schema / 非默认 search_path 部署下「列明明存在却报缺失」。
+     *
+     * @return array<string, array{type: string, nullable: bool, default: mixed}>
+     */
+    public function actualColumns(?string $connection, string $table): array
+    {
+        $rows = DB::connection($connection)->select(
+            'SELECT c.column_name AS column_name,'
+            . ' c.data_type AS data_type,'
+            . ' c.character_maximum_length AS max_length,'
+            . ' c.is_nullable AS is_nullable,'
+            . ' c.column_default AS column_default'
+            . ' FROM information_schema.columns c'
+            . ' JOIN information_schema.tables t'
+            . '   ON t.table_schema = c.table_schema AND t.table_name = c.table_name'
+            . ' WHERE LOWER(c.table_name) = LOWER(?)'
+            . ' AND c.table_schema NOT IN (\'pg_catalog\', \'information_schema\')'
+            . ' AND t.table_type = \'BASE TABLE\''
+            . ' ORDER BY c.ordinal_position',
+            [$table]
+        );
+
+        $out = [];
+        foreach ($rows as $r) {
+            $type = (string) $r->data_type;
+            // 定长/变长字符带上长度，与 MySQL 口径一致，便于额外列提示展示
+            if ($r->max_length !== null && in_array($type, ['character varying', 'character'], true)) {
+                $type .= '(' . (int) $r->max_length . ')';
+            }
+            $out[$r->column_name] = [
+                'type' => $this->normalizeColumnType($type),
+                'nullable' => strtoupper((string) $r->is_nullable) === 'YES',
+                'default' => $r->column_default,
+            ];
+        }
+
+        return $out;
+    }
+
     public function actualIndexes(?string $connection, string $table): array
     {
         $rows = DB::connection($connection)->select(
@@ -155,28 +200,106 @@ class PgsqlAdapter extends DatabaseAdapter
             if (!empty($r->is_primary)) {
                 continue;
             }
-            preg_match('/\(([^)]*)\)/', $r->def, $m);
-            $cols = isset($m[1]) ? explode(',', $m[1]) : [];
-            $cols = array_map(function ($c) {
-                return trim(trim($c), '"');
-            }, $cols);
             $map[$r->index_name] = [
                 'unique' => (bool) $r->is_unique,
-                'columns' => array_values($cols),
+                'columns' => $this->indexColumnsFromDef((string) $r->def),
             ];
         }
 
         return $map;
     }
 
+    /**
+     * 从 pg_get_indexdef 的 DDL 文本里解析索引列名。
+     *
+     * 形如 `CREATE UNIQUE INDEX uk_x ON public.t USING btree (a, b DESC)`：
+     * 取第一个左括号到匹配右括号的内容，按顶层逗号切分，去掉 ASC/DESC、NULLS FIRST/LAST
+     * 与 opclass 修饰（如 `text_pattern_ops`），再去引号。表达式索引会解析成表达式文本，
+     * 与声明列自然不匹配（不会被误当成等价索引）。
+     *
+     * @return array<int, string>
+     */
+    protected function indexColumnsFromDef(string $def): array
+    {
+        $open = strpos($def, '(');
+        if ($open === false) {
+            return [];
+        }
+
+        // 取第一对匹配括号内的内容
+        $inner = '';
+        $depth = 0;
+        $length = strlen($def);
+        for ($i = $open; $i < $length; $i++) {
+            $char = $def[$i];
+            if ($char === '(') {
+                $depth++;
+                if ($depth === 1) {
+                    continue;
+                }
+            } elseif ($char === ')') {
+                $depth--;
+                if ($depth === 0) {
+                    break;
+                }
+            }
+            $inner .= $char;
+        }
+
+        // 按顶层逗号切分
+        $parts = [];
+        $part = '';
+        $depth = 0;
+        $length = strlen($inner);
+        for ($i = 0; $i < $length; $i++) {
+            $char = $inner[$i];
+            if ($char === '(') {
+                $depth++;
+            } elseif ($char === ')') {
+                $depth--;
+            }
+            if ($char === ',' && $depth === 0) {
+                $parts[] = $part;
+                $part = '';
+                continue;
+            }
+            $part .= $char;
+        }
+        $parts[] = $part;
+
+        $columns = [];
+        foreach ($parts as $part) {
+            $part = trim($part);
+            $part = (string) preg_replace('/\s+(asc|desc|nulls\s+(first|last))\s*$/i', '', $part);
+            $part = (string) preg_replace('/\s+[a-z_][a-z0-9_]*_ops\s*$/i', '', $part);
+            $part = trim(str_replace('"', '', $part));
+            if ($part !== '') {
+                $columns[] = $part;
+            }
+        }
+
+        return $columns;
+    }
+
+    /**
+     * 解析索引创建时使用的名字。
+     *
+     * PG 索引名在同一 schema 内全局唯一：声明名被**别的表**占用时自动改名建为
+     * `{table}_{声明名}`，绝不 drop 别人的索引；名字空闲或属于本表时用声明名。
+     */
     public function resolveIndexName(string $declared, string $table, ?string $connection): string
     {
         $row = DB::connection($connection)->selectOne(
-            "SELECT 1 FROM pg_class c WHERE c.relkind = 'i' AND c.relname = ?",
+            'SELECT t.relname AS table_name'
+            . ' FROM pg_class c'
+            . ' JOIN pg_index i ON i.indexrelid = c.oid'
+            . ' JOIN pg_class t ON t.oid = i.indrelid'
+            . ' WHERE c.relname = ?'
+            . ' LIMIT 1',
             [$declared]
         );
 
-        if ($row) {
+        if ($row !== null && strcasecmp((string) $row->table_name, $table) !== 0) {
             return $table . '_' . $declared;
         }
 

@@ -4,6 +4,7 @@ namespace Dongasai\Dbcheck\Checks;
 
 use Dongasai\Dbcheck\Contracts\DbCheckInterface;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use LogicException;
 
 /**
@@ -48,8 +49,9 @@ abstract class AbstractTableDataCheck implements DbCheckInterface
      * 每项：
      *  - where：判定条件，同时作为插入字段
      *  - insert：完整静态插入数据（数组值会被 json_encode）
-     *  - item / problem / fix：展示用说明
+     *  - item / problem / fix：展示用说明（problem 缺省时回落到「缺数据行」文案）
      *  - insert_merge（可选）：运行期才能算出的列，或引用其它行（['where'=>..., 'value'=>列名]）
+     *  - timestamps（可选，默认 true）：是否自动补 created_at / updated_at；声明 false 时不写这两列
      *
      * @return array<string, array<string, mixed>>
      */
@@ -72,31 +74,50 @@ abstract class AbstractTableDataCheck implements DbCheckInterface
     }
 
     /**
-     * 固定数据检查：缺行报一项。
+     * 表是否存在（表缺失时数据检查返回空，由表结构检查统一报缺表，避免重复报错与查询异常）。
+     */
+    protected static function hasTable(): bool
+    {
+        return Schema::connection(static::connectionName())->hasTable(static::table());
+    }
+
+    /**
+     * 固定数据检查：缺行报一项；行存在时再执行行内附加校验。
      *
      * @return array<int, array<string, mixed>>
      */
     public static function check(): array
     {
+        // 表缺失时后置检查一律返回空：缺表由表结构检查报一项，避免这里 SELECT 抛异常
+        if (!static::hasTable()) {
+            return [];
+        }
+
         $issues = [];
 
         foreach (static::rows() as $key => $def) {
             $where = (array) ($def['where'] ?? []);
-            if (!static::rowExists($where)) {
+            $row = static::findRow($where);
+
+            if ($row === null) {
+                $item = (string) ($def['item'] ?? $key);
                 $issues[] = [
                     'key' => (string) $key,
                     'type' => 'data',
-                    'message' => '缺数据行: ' . ($def['item'] ?? $key),
+                    // problem 是声明里的业务后果说明（如「菜单缺失，前端无入口」），有则带上定位项
+                    'message' => isset($def['problem'])
+                        ? $item . '：' . $def['problem']
+                        : '缺数据行: ' . $item,
                     'optional' => false,
-                    'repair' => $def['fix'] ?? ('插入默认行 ' . ($def['item'] ?? $key)),
+                    'repair' => $def['fix'] ?? ('插入默认行 ' . $item),
                 ];
+
+                // 行不存在时没有可校验的对象（子类 rowIssues 可能声明 object 类型）
+                continue;
             }
 
-            if (method_exists(static::class, 'rowIssues')) {
-                $row = static::findRow($where);
-                foreach (static::rowIssues((string) $key, $def, $row) as $extra) {
-                    $issues[] = $extra;
-                }
+            foreach (static::rowIssues((string) $key, $def, $row) as $extra) {
+                $issues[] = $extra;
             }
         }
 
@@ -123,13 +144,16 @@ abstract class AbstractTableDataCheck implements DbCheckInterface
 
         foreach ($data as $k => $v) {
             if (is_array($v)) {
-                $data[$k] = json_encode($v, JSON_UNESCAPED_UNICODE);
+                $data[$k] = json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             }
         }
 
-        $now = now()->format('Y-m-d H:i:s');
-        $data['created_at'] = $data['created_at'] ?? $now;
-        $data['updated_at'] = $data['updated_at'] ?? $now;
+        // timestamps 缺省 true；声明 false 时不写时间列（由 insert 自行声明 created_at 等）
+        if (!array_key_exists('timestamps', $def) || $def['timestamps']) {
+            $now = now()->format('Y-m-d H:i:s');
+            $data['created_at'] = $data['created_at'] ?? $now;
+            $data['updated_at'] = $data['updated_at'] ?? $now;
+        }
 
         DB::connection(static::connectionName())->table(static::table())->insert($data);
     }
