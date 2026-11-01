@@ -52,6 +52,16 @@ composer require dongasai/dbcheck
 }
 ```
 
+### 更新
+
+```bash
+composer update dongasai/dbcheck            # composer 方式：升级到最新发布版
+php artisan dbcheck:check --no-interaction  # 升级后先只报告复验一轮（零变更）
+```
+
+- 升级只换工具、不动库：检查类声明与数据库都不变，复验应保持全绿；有新告警再看对应版本的 Release Notes。
+- path 仓库接入时更新 = 拉取包仓库最新代码即可，无需 composer 操作。
+
 ## 快速开始
 
 ### 1. 声明扫描根（config/dbcheck.php，可由 `dbcheck:init` 生成）
