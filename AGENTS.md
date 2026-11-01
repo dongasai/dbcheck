@@ -92,7 +92,7 @@ flowchart TD
 
 ## 宿主项目接入（lamei_shop）
 
-1. `php artisan dbcheck:init` 发布 config/dbcheck.php → **显式定义** `scan` 扫描根（框架无隐式默认；包模板默认预置 app/DbChecks 常规根，本项目挂 `Modules/ABase/DbChecks`（Laravel 框架表）与 `Modules/DcatAdmin/DbChecks`（admin_* 后台表））；驱动适配不做配置硬编码，由 DbDriver 检查判断，例外用 `--adapter=` 运行期覆盖
+1. `php artisan dbcheck:init` 发布 config/dbcheck.php → **显式定义** `scan` 扫描根（框架无隐式默认；扫描根支持 `*` 匹配模式，本项目一条惯例匹配 `Modules/<星>/DbChecks` 覆盖 ABase/DcatAdmin/全部业务模块，新模块建 DbChecks/ 目录即自动纳入）；驱动适配不做配置硬编码，由 DbDriver 检查判断，例外用 `--adapter=` 运行期覆盖
 2. 检查类放 `Modules/<模块>/DbChecks/`，命名 `<表名 StudlyCase>{TableCheck|DataCheck|FieldCheck}`
 3. `php artisan dbcheck:skill` 把编写指南注册为 agent skill（交互多选，默认 `.agent/skills`）
 4. 编写口径以 `resources/skill/dbcheck/SKILL.md` 为准（最终结构为准、迁移文件只作参考、落声明后 `--no-interaction` 复验到全绿）

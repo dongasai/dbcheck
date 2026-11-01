@@ -11,9 +11,10 @@ use LogicException;
 /**
  * 检查器注册表：自动发现（配置驱动）+ 手动注册 + 按基类分组。
  *
- * 自动发现遍历 config('dbcheck.scan') 声明的目录根，递归收集实现 DbCheckInterface 的具体类。
+ * 自动发现遍历 config('dbcheck.scan') 声明的目录根（支持 * 通配匹配模式，见 discover()），
+ * 递归收集实现 DbCheckInterface 的具体类。
  * 手动注册（register）优先于自动发现，且按类名去重。
- * 分组依据：继承的抽象基类（存在/行差异/固定数据/字段明细）；
+ * 分组依据：继承的抽象基类（表结构/固定数据/字段明细）；
  * 直接实现 DbCheckInterface 却不继承任一抽象基类的类 → 抛 LogicException。
  */
 class DbCheckRegistry
@@ -162,6 +163,10 @@ class DbCheckRegistry
     /**
      * 递归扫描配置声明的目录根，推导类名。
      *
+     * 扫描根支持「匹配模式」：path / namespace 中含 `*`（path 至多一个）时按 glob
+     * 展开为具体目录根（无匹配自动跳过），namespace 的 `*` 以匹配到的目录名替换——
+     * 惯例目录一条声明即可，等价逐根穷举但免维护（具体示例见 config/dbcheck.php 注释）。
+     *
      * @return array<int, class-string>
      */
     protected static function discover(): array
@@ -170,38 +175,86 @@ class DbCheckRegistry
         $scan = (array) config('dbcheck.scan', []);
 
         foreach ($scan as $root) {
-            $path = $root['path'] ?? null;
-            $ns = $root['namespace'] ?? null;
-            if (!$path || !$ns || !is_dir($path)) {
-                continue;
-            }
-
-            $iter = new \RecursiveIteratorIterator(
-                new \RecursiveDirectoryIterator($path, \FilesystemIterator::SKIP_DOTS)
-            );
-
-            foreach ($iter as $file) {
-                if ($file->getExtension() !== 'php') {
-                    continue;
-                }
-
-                $rel = substr($file->getPathname(), strlen(rtrim($path, '/\\')));
-                $rel = ltrim($rel, '/\\');
-                $rel = preg_replace('/\.php$/', '', $rel);
-                if ($rel === '' || $rel === null) {
-                    continue;
-                }
-
-                /** @var class-string $class */
-                $class = rtrim($ns, '\\') . '\\' . str_replace(['/', '\\'], '\\', $rel);
-
-                if (!class_exists($class)) {
-                    continue;
-                }
-                $found[] = $class;
+            foreach (static::expandRoot((string) ($root['path'] ?? ''), (string) ($root['namespace'] ?? '')) as $concrete) {
+                static::scanRoot($concrete['path'], $concrete['namespace'], $found);
             }
         }
 
         return $found;
+    }
+
+    /**
+     * 展开单个扫描根：path 含 `*` 时按 glob（仅目录）展开为 0..N 个具体根，否则原样单根。
+     *
+     * @return array<int, array{path: string, namespace: string}>
+     */
+    protected static function expandRoot(string $path, string $ns): array
+    {
+        if ($path === '' || $ns === '') {
+            return [];
+        }
+
+        if (strpos($path, '*') === false) {
+            return is_dir($path) ? [['path' => $path, 'namespace' => $ns]] : [];
+        }
+
+        if (substr_count($path, '*') > 1) {
+            throw new LogicException('扫描根 path 至多支持一个 * 通配: ' . $path);
+        }
+
+        $star = (int) strpos($path, '*');
+        $prefix = (string) substr($path, 0, $star);
+        $suffix = (string) substr($path, $star + 1);
+
+        $out = [];
+        $dirs = glob($path, GLOB_ONLYDIR) ?: [];
+        sort($dirs);
+        foreach ($dirs as $dir) {
+            // 匹配到的目录名 = 去掉模板前缀/后缀的中间段
+            $val = (string) substr($dir, strlen($prefix), strlen($dir) - strlen($prefix) - strlen($suffix));
+            $out[] = [
+                'path' => $dir,
+                'namespace' => str_replace('*', $val, $ns),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * 递归扫描单个具体目录根，把发现的类追加进 $found。
+     *
+     * @param array<int, class-string> $found
+     */
+    protected static function scanRoot(string $path, string $ns, array &$found): void
+    {
+        if (!is_dir($path)) {
+            return;
+        }
+
+        $iter = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($path, \FilesystemIterator::SKIP_DOTS)
+        );
+
+        foreach ($iter as $file) {
+            if ($file->getExtension() !== 'php') {
+                continue;
+            }
+
+            $rel = substr($file->getPathname(), strlen(rtrim($path, '/\\')));
+            $rel = ltrim($rel, '/\\');
+            $rel = preg_replace('/\.php$/', '', $rel);
+            if ($rel === '' || $rel === null) {
+                continue;
+            }
+
+            /** @var class-string $class */
+            $class = rtrim($ns, '\\') . '\\' . str_replace(['/', '\\'], '\\', $rel);
+
+            if (!class_exists($class)) {
+                continue;
+            }
+            $found[] = $class;
+        }
     }
 }

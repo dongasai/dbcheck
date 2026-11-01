@@ -25,9 +25,9 @@ description: dbcheck 数据库自检框架——按表编写三类检查类（�
 
 ## 命名规则
 
-表名转 StudlyCase 后加类型后缀（`TableCheck` / `DataCheck` / `FieldCheck`）。
+表名整串转 StudlyCase 后加类型后缀（`TableCheck` / `DataCheck` / `FieldCheck`）：**模块前缀属于表名本体，保留**，如 `admin_settings` → `AdminSettingsTableCheck`、`user1_users` → `User1UsersTableCheck`。
 
-库前缀**不参与类名**（先去掉前缀再 StudlyCase），例如 `hy26_meetings` → `MeetingsTableCheck` 而非 `Hy26MeetingsTableCheck`。
+只有**站点级库前缀**（整站统一的历史前缀，如 `hy26_`）不参与类名：`hy26_meetings` → `MeetingsTableCheck` 而非 `Hy26MeetingsTableCheck`。
 
 ## 放置位置
 
@@ -35,8 +35,10 @@ description: dbcheck 数据库自检框架——按表编写三类检查类（�
 - 项目级（非模块）表：`Modules/ABase/DbChecks/`，命名空间 `Modules\ABase\DbChecks`（挂 ABase 基础模块；旧口径 app/DbChecks 与「代码只在 Modules/」铁律及编辑钩子冲突，已废弃）
 
 通过 `config/dbcheck.php` 的 `scan` 声明扫描根（可用 `dbcheck:init` 生成）。
-**框架无任何隐式默认扫描目录，所有要扫描的根都必须显式定义**；包默认模板只预置常规根
-app/DbChecks（目录不存在时自动跳过），本项目挂 ABase：
+**框架无任何隐式默认扫描目录，所有要扫描的根都必须显式定义**；扫描根支持**匹配模式**——
+path/namespace 各至多一个 `*`，按 glob（仅目录）展开为具体根，namespace 的 `*` 以匹配到的目录名替换，
+无匹配自动跳过；path 多于一个 `*` 抛 LogicException。包默认模板只预置常规根
+app/DbChecks（目录不存在时自动跳过），本项目用一条惯例匹配覆盖全部模块：
 
 ```php
 // 包默认模板（约定根，目录不存在自动跳过）
@@ -44,10 +46,10 @@ app/DbChecks（目录不存在时自动跳过），本项目挂 ABase：
     ['path' => base_path('app/DbChecks'), 'namespace' => 'App\\DbChecks\\'],
 ],
 
-// 本项目显式定义（Laravel 框架表挂 ABase；Dcat Admin 后台表 admin_* 挂 DcatAdmin）
+// 本项目：惯例目录一条匹配模式（ABase 框架表 / DcatAdmin admin_* / 全部业务模块自动覆盖）；
+// 新模块按约定建 DbChecks/ 目录即自动纳入，无需改配置；惯例外的目录用无通配普通根逐条声明
 'scan' => [
-    ['path' => base_path('Modules/ABase/DbChecks'), 'namespace' => 'Modules\\ABase\\DbChecks\\'],
-    ['path' => base_path('Modules/DcatAdmin/DbChecks'), 'namespace' => 'Modules\\DcatAdmin\\DbChecks\\'],
+    ['path' => base_path('Modules/*/DbChecks'), 'namespace' => 'Modules\\*\\DbChecks\\'],
 ],
 ```
 
