@@ -4,6 +4,7 @@ namespace Dongasai\Dbcheck\Checks;
 
 use Dongasai\Dbcheck\Contracts\DbCheckInterface;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use LogicException;
 
 /**
@@ -68,12 +69,25 @@ abstract class AbstractTableFieldCheck implements DbCheckInterface
     }
 
     /**
+     * 表是否存在（表缺失时字段检查返回空，由表结构检查统一报缺表，避免重复报错与查询异常）。
+     */
+    protected static function hasTable(): bool
+    {
+        return Schema::connection(static::connectionName())->hasTable(static::table());
+    }
+
+    /**
      * 字段明细检查。
      *
      * @return array<int, array<string, mixed>>
      */
     public static function check(): array
     {
+        // 表缺失时后置检查一律返回空：缺表由表结构检查报一项，避免这里 SELECT 抛异常
+        if (!static::hasTable()) {
+            return [];
+        }
+
         $issues = [];
 
         foreach (static::rows() as $key => $def) {

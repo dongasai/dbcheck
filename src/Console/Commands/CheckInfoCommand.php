@@ -127,10 +127,22 @@ class CheckInfoCommand extends Command
             return $this->runInline($groups);
         }
 
+        $allIssues = [];
+        $failedChecks = 0;
+
         foreach ($this->order as $gk => $label) {
             foreach ($groups[$gk] as $class) {
                 $module = $class::moduleName();
-                $issues = $class::check();
+
+                // 单个检查器异常不中断整体自检：记一项失败，继续后面的检查器
+                try {
+                    $issues = $class::check();
+                } catch (\Throwable $e) {
+                    $this->line('✗ ' . $module . ' · ' . $label);
+                    $this->error('  检查失败: ' . $e->getMessage());
+                    $failedChecks++;
+                    continue;
+                }
 
                 if (empty($issues)) {
                     $this->line('✓ ' . $module . ' · ' . $label);
@@ -144,19 +156,22 @@ class CheckInfoCommand extends Command
             }
         }
 
-        if (empty($allIssues)) {
+        if (empty($allIssues) && $failedChecks === 0) {
             $this->info('全部检查通过，无异常。');
 
             return self::SUCCESS;
         }
 
         $this->newLine();
-        $this->error('发现 ' . count($allIssues) . ' 个异常');
-        $this->line('错误明细:');
-        foreach ($allIssues as $i => $it) {
-            $issue = $it['issue'];
-            $this->line(($i + 1) . '. ' . $it['class']::moduleName() . ' · ' . $it['label'] . ' / ' . $issue['key']
-                . ' — ' . $issue['message']);
+        $this->error('发现 ' . count($allIssues) . ' 个异常'
+            . ($failedChecks > 0 ? '，' . $failedChecks . ' 个检查器执行失败' : ''));
+        if (!empty($allIssues)) {
+            $this->line('错误明细:');
+            foreach ($allIssues as $i => $it) {
+                $issue = $it['issue'];
+                $this->line(($i + 1) . '. ' . $it['class']::moduleName() . ' · ' . $it['label'] . ' / ' . $issue['key']
+                    . ' — ' . $issue['message']);
+            }
         }
 
         if ($noInteraction) {
@@ -165,7 +180,7 @@ class CheckInfoCommand extends Command
             return self::FAILURE;
         }
 
-        $errorCount = 0;
+        $errorCount = $failedChecks;
         foreach ($allIssues as $it) {
             if (!$this->fixIssue($it['class'], $it['issue'], $it['label'])) {
                 $errorCount++;
@@ -184,11 +199,21 @@ class CheckInfoCommand extends Command
     {
         $total = 0;
         $errorCount = 0;
+        $failedChecks = 0;
 
         foreach ($this->order as $gk => $label) {
             foreach ($groups[$gk] as $class) {
                 $module = $class::moduleName();
-                $issues = $class::check();
+
+                // 单个检查器异常不中断整体自检：记一项失败，继续后面的检查器
+                try {
+                    $issues = $class::check();
+                } catch (\Throwable $e) {
+                    $this->line('✗ ' . $module . ' · ' . $label);
+                    $this->error('  检查失败: ' . $e->getMessage());
+                    $failedChecks++;
+                    continue;
+                }
 
                 if (empty($issues)) {
                     $this->line('✓ ' . $module . ' · ' . $label);
@@ -206,15 +231,16 @@ class CheckInfoCommand extends Command
         }
 
         $this->newLine();
-        if ($total === 0) {
+        if ($total === 0 && $failedChecks === 0) {
             $this->info('全部检查通过，无异常。');
 
             return self::SUCCESS;
         }
 
-        $this->line('共 ' . $total . ' 个异常项处理完毕（失败 ' . $errorCount . ' 个）。');
+        $this->line('共 ' . $total . ' 个异常项处理完毕（失败 ' . $errorCount . ' 个'
+            . ($failedChecks > 0 ? '，检查器执行失败 ' . $failedChecks . ' 个' : '') . '）。');
 
-        return $errorCount > 0 ? self::FAILURE : self::SUCCESS;
+        return ($errorCount + $failedChecks) > 0 ? self::FAILURE : self::SUCCESS;
     }
 
     /**
@@ -228,7 +254,9 @@ class CheckInfoCommand extends Command
             $this->newLine();
             $this->line('【' . $it['class']::moduleName() . ' · ' . $it['label'] . '】' . $it['issue']['key']);
             $this->previewSql($it['class'], $it['issue']['key']);
-            $this->line('（非交互模式，未执行修复）');
+            $this->line(!empty($it['issue']['optional'])
+                ? '（非交互模式，未执行修复；可选处理项默认不处理）'
+                : '（非交互模式，未执行修复）');
         }
     }
 
@@ -239,7 +267,16 @@ class CheckInfoCommand extends Command
      */
     protected function previewSql(string $class, string $key): void
     {
-        foreach ($class::preview($key) as $s) {
+        try {
+            $statements = $class::preview($key);
+        } catch (\Throwable $e) {
+            // 预览失败不阻断后续确认：只提示，由用户决定是否继续
+            $this->warn('  预览 SQL 失败: ' . $e->getMessage());
+
+            return;
+        }
+
+        foreach ($statements as $s) {
             $formatted = $this->formatSql($s);
             if ($formatted === '' || !$this->isWriteQuery($formatted)) {
                 continue;

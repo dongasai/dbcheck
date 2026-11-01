@@ -135,6 +135,51 @@ class PgsqlAdapter extends DatabaseAdapter
         return strtolower($def['type'] ?? ColumnType::DEFAULT);
     }
 
+    /**
+     * 读取实际列结构（PG 专用实现）。
+     *
+     * PG 的 information_schema.COLUMNS.TABLE_SCHEMA 是 schema 名（public 等），
+     * 不是数据库名，因此不能像 MySQL 那样用 getDatabaseName() 过滤；
+     * 改为按表名（大小写不敏感）跨 schema 匹配并排除系统 schema，
+     * 避免多 schema / 非默认 search_path 部署下「列明明存在却报缺失」。
+     *
+     * @return array<string, array{type: string, nullable: bool, default: mixed}>
+     */
+    public function actualColumns(?string $connection, string $table): array
+    {
+        $rows = DB::connection($connection)->select(
+            'SELECT c.column_name AS column_name,'
+            . ' c.data_type AS data_type,'
+            . ' c.character_maximum_length AS max_length,'
+            . ' c.is_nullable AS is_nullable,'
+            . ' c.column_default AS column_default'
+            . ' FROM information_schema.columns c'
+            . ' JOIN information_schema.tables t'
+            . '   ON t.table_schema = c.table_schema AND t.table_name = c.table_name'
+            . ' WHERE LOWER(c.table_name) = LOWER(?)'
+            . ' AND c.table_schema NOT IN (\'pg_catalog\', \'information_schema\')'
+            . ' AND t.table_type = \'BASE TABLE\''
+            . ' ORDER BY c.ordinal_position',
+            [$table]
+        );
+
+        $out = [];
+        foreach ($rows as $r) {
+            $type = (string) $r->data_type;
+            // 定长/变长字符带上长度，与 MySQL 口径一致，便于额外列提示展示
+            if ($r->max_length !== null && in_array($type, ['character varying', 'character'], true)) {
+                $type .= '(' . (int) $r->max_length . ')';
+            }
+            $out[$r->column_name] = [
+                'type' => $this->normalizeColumnType($type),
+                'nullable' => strtoupper((string) $r->is_nullable) === 'YES',
+                'default' => $r->column_default,
+            ];
+        }
+
+        return $out;
+    }
+
     public function actualIndexes(?string $connection, string $table): array
     {
         $rows = DB::connection($connection)->select(
