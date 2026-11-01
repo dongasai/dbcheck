@@ -5,6 +5,7 @@ namespace Dongasai\Dbcheck;
 use Dongasai\Dbcheck\Console\Commands\CheckInfoCommand;
 use Dongasai\Dbcheck\Console\Commands\DbcheckDeleteCommand;
 use Dongasai\Dbcheck\Console\Commands\DbcheckInitCommand;
+use Dongasai\Dbcheck\Console\Commands\DbcheckSeedCommand;
 use Dongasai\Dbcheck\Console\Commands\DbcheckSkillCommand;
 use Illuminate\Support\ServiceProvider;
 
@@ -12,7 +13,7 @@ use Illuminate\Support\ServiceProvider;
  * DbCheck 服务供给器。
  *
  * - 合并配置 dbcheck.php；
- * - 在控制台环境注册 dbcheck:check 命令。
+ * - 在控制台环境注册全部 artisan 命令（check / delete / seed / init / skill）。
  *
  * 通过 composer 的 extra.laravel.providers 自动发现（Laravel 包自动发现机制），
  * 无需在主项目手动注册。
@@ -37,6 +38,7 @@ class DbcheckServiceProvider extends ServiceProvider
                 CheckInfoCommand::class,
                 DbcheckDeleteCommand::class,
                 DbcheckInitCommand::class,
+                DbcheckSeedCommand::class,
                 DbcheckSkillCommand::class,
             ]);
 

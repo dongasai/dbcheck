@@ -197,25 +197,24 @@ php artisan dbcheck:check --adapter=mysql57   # 5.7 等无原生 JSON 的旧版�
 
 ## 分组
 
-检查器覆盖 `group(): ?string` 自行声明分组名（**框架不预置任何分组名**）：
+检查器覆盖 `group(): ?string` 声明分组：
 
 - 返回 `null` → 常规检查，`dbcheck:check` 默认执行；
-- 返回任意字符串（如 `'testdata'`）→ 分组检查，默认**不执行**，需 `--group=<名称>` 显式触发。
+- 返回任意字符串（如 `'testdata'`）→ 分组检查，默认**不执行**，需 `--group=<名称>` / `dbcheck:seed --group=<名称>` 显式触发。
 
-所谓 **seeder 就是执行某分组的检查（如 data + field）**：
+框架内置两个标准分组常量（`Dongasai\Dbcheck\Support\DbCheckGroup`）：
 
-```bash
-php artisan dbcheck:check --group=testdata
-```
+- **`DELETE`（`'delete'`，能力默认归属）**：DataCheck 覆盖 `deleteExtra(): true`（删除验证——删除未声明的
+  多余数据行，与缺行检查相反）时自动归入——**删除属危险动作，不随 `dbcheck:check` 默认执行**；
+  子类覆盖 `group()` 后以子类为准。**只允许在数据全量受声明控制的字典/固定表上开启**，
+  业务表开启会把正常业务数据当多余行删掉。触发入口 `dbcheck:delete`（按 deleteExtra 能力收集，
+  不受分组过滤影响）。
+- **`SEEDER`（`'seeder'`，声明制）**：DataCheck / FieldCheck 显式覆盖
+  `group(): DbCheckGroup::SEEDER` 即声明为种子数据——不随默认扫执行，由 `dbcheck:seed`
+  显式播种（缺行补插 + 字段回写）；`--group=<名>` 可改收任意自定义分组。
 
-框架内置一个标准分组常量 `Dongasai\Dbcheck\Support\DbCheckGroup::DELETE`（`'delete'`）：
-DataCheck 覆盖 `deleteExtra(): true`（删除验证——删除未声明的多余数据行，与缺行检查相反）时，
-默认自动归入该分组——**删除属危险动作，不随 `dbcheck:check` 默认执行**，需 `--group=delete` 显式触发；
-子类覆盖 `group()` 后以子类为准。**只允许在数据全量受声明控制的字典/固定表上开启**，
-业务表开启会把正常业务数据当多余行删掉。
-
-`dbcheck:delete` 是删除验证检查器的专用触发入口：按 `deleteExtra()` 能力收集（不受分组过滤影响），
-逐条预览 DELETE SQL 确认后清理多余行，无需 `--group=delete`。
+`dbcheck:delete` / `dbcheck:seed` 职责正交：seed 只补（缺行插行、字段回写），delete 只删
+（`data.extra.*` 多余行）——同一检查器可同时声明 SEEDER 分组与 deleteExtra。
 
 ## 命令
 
@@ -232,6 +231,10 @@ php artisan dbcheck:check --check=all --detail --db-write  # 库自检 + 结构�
 php artisan dbcheck:delete                      # 删除验证：清理开启 deleteExtra 的检查器中未声明的多余数据行（逐条确认）
 php artisan dbcheck:delete --yes                # 免确认直接删除全部报告的多余行
 php artisan dbcheck:delete --no-interaction     # 只报告多余行，零变更（退出码非 0）
+php artisan dbcheck:seed                        # 播种 seeder 分组：缺行补插 + 字段回写（逐条确认）
+php artisan dbcheck:seed --group=testdata       # 播种指定自定义分组
+php artisan dbcheck:seed --yes                  # 免确认直接执行全部播种项
+php artisan dbcheck:seed --no-interaction       # 只报告播种项，零变更（退出码非 0）
 ```
 
 ## 边界

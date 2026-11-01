@@ -4,7 +4,7 @@
 >
 > 包类型 `library` · PHP >=7.4 · illuminate 8–13 · 经 composer extra.laravel.providers 自动发现（doctrine/dbal 已移除：包源码零使用，Laravel 10+ 原生 `change()` 无需 dbal）
 
-_初始化：2026-11-01 00:56 · 最近全量校对：2026-11-01（并入 SQLite 适配器 / `--check=db` / tests/ / 删除验证 + `dbcheck:delete` 后）_
+_初始化：2026-11-01 00:56 · 最近全量校对：2026-11-01（并入 SQLite 适配器 / `--check=db` / tests/ / 删除验证 `dbcheck:delete` / 播种 `dbcheck:seed` + `DbCheckGroup::SEEDER` 后）_
 
 ## 架构总览
 
@@ -13,6 +13,7 @@ flowchart TD
     subgraph Commands["Console/Commands 入口"]
         CHECK["dbcheck:check 自检 + 修复"]
         DELETE["dbcheck:delete 多余行清理"]
+        SEED["dbcheck:seed 播种数据"]
         INIT["dbcheck:init 发布配置"]
         SKILL["dbcheck:skill 注册 agent skill"]
     end
@@ -41,6 +42,7 @@ flowchart TD
 
     CHECK --> REG
     DELETE -- deleteExtra 能力收集 --> DATA
+    SEED -- seeder 分组收集 --> DATA & FIELD
     REG --> TABLE & DATA & FIELD
     TABLE -- 建表与比对 --> FACTORY
     FACTORY --> DBDRIVER
@@ -61,6 +63,8 @@ flowchart TD
 
 **删除链路**：`dbcheck:delete` 按「能力」（`deleteExtra() = true`）收集 DataCheck（不受分组过滤影响）→ 只取 `data.extra.*` 多余行项 → 交互逐条确认 / `--yes` 免确认 → 按身份等值 DELETE → 复检。
 
+**播种链路**：`dbcheck:seed` 按「分组」（默认 `DbCheckGroup::SEEDER`，`--group=` 可指定任意自定义分组）收集 DataCheck / FieldCheck → 缺行补插（`data.*`）+ 字段回写（`field.*` / `item.*`）→ 复检。seed 只补、delete 只删，二者正交（同一检查器可同时声明 SEEDER 分组与 deleteExtra）。
+
 ## 核心概念
 
 ### 三类检查
@@ -75,7 +79,7 @@ flowchart TD
 
 - **一张表一个检查器**：TableCheck 同时实现 TableSchemaProvider，是该表最终结构的唯一声明处（不存在创建，存在比对差异并修复）。禁止两处维护同一张表定义。
 - **异常项 key 命名**：`table` / `table.charset` / `column.<名>` / `index.<名>` / `extra_column.<名>` / `extra_index.<名>` / `data.<标识>` / `data.extra.<身份JSON>` / `field.<标识>.<列>` / `item.<标识>.<列>.<项key>`。fix() 对未知 key 必须 LogicException。
-- **分组**：`group()` 返回 null = 常规（默认执行）；非空 = 分组检查（仅 `--group=<名>` / `--all-groups` 触发）。「seeder」语义 = 执行某分组的 row/field 检查。
+- **分组**：`group()` 返回 null = 常规（默认执行）；非空 = 分组检查（仅 `--group=<名>` / `--all-groups` 触发）。标准分组常量两个：`DELETE`（deleteExtra 能力默认归属）与 `SEEDER`（声明制种子数据）——前者由 `dbcheck:delete`、后者由 `dbcheck:seed` 显式触发。
 - **开关**：静态 `$enabled=false` 时自动发现跳过（手动 register() 不受影响）。
 - **比对深度由适配器决定**：MySQL/MySQL8 精确比对；PG / SQLite 仅存在性（防误报）。
 
@@ -87,7 +91,7 @@ flowchart TD
 | src/Checks/ | [AGENTS.md](src/Checks/AGENTS.md) | 三类检查抽象基类（核心） |
 | src/Adapters/ | [AGENTS.md](src/Adapters/AGENTS.md) | 数据库类型判断（DbDriver）+ MySQL/MySQL8/PG/SQLite 驱动适配 |
 | src/Support/ | [AGENTS.md](src/Support/AGENTS.md) | 注册表 + 列类型常量 + 数据库兼容工具（DatabaseCompat） |
-| src/Console/Commands/ | [AGENTS.md](src/Console/Commands/AGENTS.md) | 四条 artisan 命令（check / delete / init / skill） |
+| src/Console/Commands/ | [AGENTS.md](src/Console/Commands/AGENTS.md) | 五条 artisan 命令（check / delete / seed / init / skill） |
 | resources/skill/dbcheck/ | —（SKILL.md 即指南） | agent 引导 skill，经 dbcheck:skill 注册到宿主项目 |
 
 ## 全局规范
