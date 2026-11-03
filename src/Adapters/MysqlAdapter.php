@@ -5,6 +5,7 @@ namespace Dongasai\Dbcheck\Adapters;
 use Dongasai\Dbcheck\Support\ColumnType;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
+use LogicException;
 
 /**
  * MySQL 适配器（含 5.7 等无原生 JSON 的旧版本）。
@@ -54,7 +55,7 @@ class MysqlAdapter extends DatabaseAdapter
      */
     public function buildColumn(Blueprint $table, string $name, array $def)
     {
-        $type = $def['type'] ?? ColumnType::DEFAULT;
+        $type = $this->declaredType($def);
         $col = $this->newColumn($table, $name, $type, $def);
         $this->applyModifiers($col, $def);
 
@@ -112,7 +113,7 @@ class MysqlAdapter extends DatabaseAdapter
             case ColumnType::ENUM:
                 return $table->enum($name, array_map('strval', (array) ($def['values'] ?? [])));
             default:
-                throw new \InvalidArgumentException('未知的列类型声明: ' . $type);
+                throw new LogicException('未知的列类型声明: ' . $type);
         }
     }
 
@@ -153,7 +154,7 @@ class MysqlAdapter extends DatabaseAdapter
 
     public function expectedColumnType(array $def): string
     {
-        $type = $def['type'] ?? ColumnType::DEFAULT;
+        $type = $this->declaredType($def);
 
         switch ($type) {
             case ColumnType::ID:
@@ -207,7 +208,7 @@ class MysqlAdapter extends DatabaseAdapter
                     array_map('strval', (array) ($def['values'] ?? []))
                 )) . ')';
             default:
-                throw new \InvalidArgumentException('未知的列类型声明: ' . $type);
+                throw new LogicException('未知的列类型声明: ' . $type);
         }
     }
 

@@ -81,4 +81,105 @@ class DbCheckRegistryTest extends TestCase
 
         $this->assertSame([], DbCheckRegistry::all());
     }
+
+    /**
+     * counts() 按继承的抽象基类分类计数，直接实现接口的类计入 unknown。
+     */
+    public function testCountsClassifiesByBaseClass(): void
+    {
+        DbCheckRegistry::register(DemoTableCheck::class);
+        DbCheckRegistry::register(DemoDataCheck::class);
+        DbCheckRegistry::register(DemoFieldCheck::class);
+        DbCheckRegistry::register(TestdataDataCheck::class);
+        DbCheckRegistry::register(DirectCheck::class);
+
+        $this->assertSame([
+            'table' => 1,
+            'data' => 2,
+            'field' => 1,
+            'unknown' => 1,
+            'total' => 5,
+        ], DbCheckRegistry::counts());
+    }
+
+    /**
+     * counts() 遇「直接实现接口未继承基类」的类不抛异常（仅供诊断展示，不阻断）。
+     */
+    public function testCountsToleratesDirectImplementer(): void
+    {
+        DbCheckRegistry::register(DirectCheck::class);
+
+        $counts = DbCheckRegistry::counts();
+
+        $this->assertSame(1, $counts['unknown']);
+        $this->assertSame(0, $counts['table']);
+        $this->assertSame(0, $counts['data']);
+        $this->assertSame(0, $counts['field']);
+        $this->assertSame(1, $counts['total']);
+    }
+
+    /**
+     * scan 配置为空时扫描根报告为空数组。
+     */
+    public function testScanRootsEmptyWithoutConfig(): void
+    {
+        $this->assertSame([], DbCheckRegistry::scanRoots());
+    }
+
+    /**
+     * 普通扫描根：报告 matched=true 与实际命中的类数量。
+     */
+    public function testScanRootsReportsMatchedRoot(): void
+    {
+        $fixtures = dirname(__DIR__) . '/Fixtures';
+        config(['dbcheck.scan' => [
+            ['path' => $fixtures, 'namespace' => 'Dongasai\\Dbcheck\\Tests\\Fixtures'],
+        ]]);
+
+        $roots = DbCheckRegistry::scanRoots();
+
+        $this->assertCount(1, $roots);
+        $this->assertSame($fixtures, $roots[0]['path']);
+        $this->assertSame('Dongasai\\Dbcheck\\Tests\\Fixtures', $roots[0]['namespace']);
+        $this->assertTrue($roots[0]['matched']);
+        // 与 all() 同口径：过滤掉非检查器类（FakeAttributeAdapter）与被禁用类（DisabledTableCheck）
+        $this->assertSame(count(DbCheckRegistry::all()), $roots[0]['count']);
+        $this->assertLessThan(count((array) glob($fixtures . '/*.php')), $roots[0]['count']);
+    }
+
+    /**
+     * 通配模板根：展开为具体根（namespace 的 * 以目录名替换）并报告命中数。
+     */
+    public function testScanRootsExpandsWildcardRoot(): void
+    {
+        config(['dbcheck.scan' => [
+            ['path' => dirname(__DIR__) . '/Fixture*', 'namespace' => 'Dongasai\\Dbcheck\\Tests\\Fixture*'],
+        ]]);
+
+        $roots = DbCheckRegistry::scanRoots();
+
+        $this->assertCount(1, $roots);
+        $this->assertTrue($roots[0]['matched']);
+        $this->assertStringEndsWith('Fixtures', str_replace('\\', '/', $roots[0]['path']));
+        $this->assertSame('Dongasai\\Dbcheck\\Tests\\Fixtures', $roots[0]['namespace']);
+        $this->assertSame(count(DbCheckRegistry::all()), $roots[0]['count']);
+    }
+
+    /**
+     * 目录不存在的扫描根：matched=false、count=0（不抛异常）。
+     */
+    public function testScanRootsReportsUnmatchedRoot(): void
+    {
+        $missing = dirname(__DIR__) . '/__no_such_dbcheck_dir__';
+        config(['dbcheck.scan' => [
+            ['path' => $missing, 'namespace' => 'Dongasai\\Dbcheck\\Tests\\Missing'],
+        ]]);
+
+        $roots = DbCheckRegistry::scanRoots();
+
+        $this->assertCount(1, $roots);
+        $this->assertSame($missing, $roots[0]['path']);
+        $this->assertFalse($roots[0]['matched']);
+        $this->assertSame(0, $roots[0]['count']);
+    }
 }

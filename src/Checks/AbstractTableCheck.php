@@ -3,8 +3,11 @@
 namespace Dongasai\Dbcheck\Checks;
 
 use Dongasai\Dbcheck\Adapters\AdapterFactory;
+use Dongasai\Dbcheck\Adapters\DatabaseAdapter;
 use Dongasai\Dbcheck\Contracts\DbCheckInterface;
 use Dongasai\Dbcheck\Contracts\TableSchemaProvider;
+use Dongasai\Dbcheck\Support\DatabaseCompat;
+use Dongasai\Dbcheck\Support\PreviewContext;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -106,6 +109,26 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
     }
 
     /**
+     * 当前连接是否有可用的驱动适配器（供命令提示「表结构检查已降级」，不参与差异判定）。
+     *
+     * 无适配器（DM / SQLServer 等）时 check() 只做「表是否存在」的降级比对；
+     * 命令侧据本方法逐个检查器 warn，避免「没做比对」被当成「比对通过」。
+     * 连接本身不可用等其它异常不在这里下结论（返回 true），交给 check() 报「检查失败」。
+     */
+    public static function hasAdapter(): bool
+    {
+        try {
+            AdapterFactory::make(static::connectionName());
+
+            return true;
+        } catch (\InvalidArgumentException $e) {
+            return false;
+        } catch (\Throwable $e) {
+            return true;
+        }
+    }
+
+    /**
      * 表结构检查：表缺失报表缺失项；表存在比对表编码（声明了才比）与列/索引差异。
      *
      * @return array<int, array<string, mixed>>
@@ -126,8 +149,23 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
 
         $table = static::table();
         $conn = static::connectionName();
-        $adapter = AdapterFactory::make($conn);
-        $actualCols = $adapter->actualColumns($conn, $table);
+
+        // 未知驱动（达梦 / SQLServer 等无适配器）优雅降级：不整体失败，只做存在性比对
+        // （表不存在已在上面报过 table 项）；精确比对跳过，命令层按检查器逐个提示「已降级」
+        try {
+            $adapter = AdapterFactory::make($conn);
+        } catch (\InvalidArgumentException $e) {
+            return [];
+        }
+
+        // 列声明校验（与驱动比对深度无关）：缺 type / 未知 type 当场抛错。
+        // 只做存在性比对的 PG/SQLite 不调用 expectedColumnType()，不校验会把错误声明表现为
+        // 「列不存在」且 fix 必抛 —— 永远修不好，所以在进入比对前统一校验。
+        foreach (static::columns() as $def) {
+            $adapter->expectedColumnType($def);
+        }
+
+        $actualCols = static::readActualColumns($conn, $table, $adapter);
         $issues = [];
 
         // 表级字符集/排序规则（声明制：声明了才比对；驱动不支持读表编码时自动跳过）
@@ -171,36 +209,30 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
             // 列属性比对（仅 MySQL / MySQL8）
             if ($adapter->comparesColumnAttributes()) {
                 $actual = $actualCols[$name];
+                $diffs = [];
+
                 $expectedType = $adapter->expectedColumnType($def);
                 if ($actual['type'] !== $expectedType) {
-                    $issues[] = [
-                        'key' => 'column.' . $name,
-                        'type' => 'column',
-                        'message' => '列 ' . $name . ' 类型不一致：实际 ' . $actual['type'] . ' ≠ 期望 ' . $expectedType,
-                        'optional' => false,
-                        'repair' => '改为 ' . $expectedType,
-                    ];
-                    continue;
+                    $diffs[] = '类型 实际 ' . $actual['type'] . ' ≠ 期望 ' . $expectedType;
                 }
                 if ($actual['nullable'] !== !empty($def['nullable'])) {
-                    $issues[] = [
-                        'key' => 'column.' . $name,
-                        'type' => 'column',
-                        'message' => '列 ' . $name . ' 可空不一致：实际 ' . ($actual['nullable'] ? '可空' : '非空')
-                            . ' ≠ 期望 ' . (!empty($def['nullable']) ? '可空' : '非空'),
-                        'optional' => false,
-                        'repair' => '调整可空属性',
-                    ];
-                    continue;
+                    $diffs[] = '可空 实际 ' . ($actual['nullable'] ? '可空' : '非空')
+                        . ' ≠ 期望 ' . (!empty($def['nullable']) ? '可空' : '非空');
                 }
                 if (!$adapter->defaultMatches($actual['default'], $def)) {
+                    $diffs[] = '默认值 实际 ' . var_export($actual['default'], true)
+                        . ' ≠ 期望 ' . var_export($def['default'] ?? null, true);
+                }
+
+                // 同一列的多个属性差异聚合成一个异常项：一次报全、一次整列重写修好，
+                // 避免「类型→可空→默认值」逐轮 continue 导致要跑多轮才能到全绿
+                if ($diffs !== []) {
                     $issues[] = [
                         'key' => 'column.' . $name,
                         'type' => 'column',
-                        'message' => '列 ' . $name . ' 默认值不一致：实际 ' . var_export($actual['default'], true)
-                            . ' ≠ 期望 ' . var_export($def['default'] ?? null, true),
+                        'message' => '列 ' . $name . ' 与最终定义不一致：' . implode('；', $diffs),
                         'optional' => false,
-                        'repair' => '调整默认值',
+                        'repair' => '按最终定义整列重写 ' . $name,
                     ];
                 }
             }
@@ -219,10 +251,11 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
             }
         }
 
-        $actualIdx = $adapter->actualIndexes($conn, $table);
+        $actualIdx = static::readActualIndexes($conn, $table, $adapter);
         $strictIndex = $adapter->comparesIndexAttributes();
+        $declaredIdx = static::declaredIndexes();
 
-        foreach (static::indexes() as $name => $idx) {
+        foreach ($declaredIdx as $name => $idx) {
             $cols = (array) ($idx['columns'] ?? []);
             $unique = !empty($idx['unique']);
 
@@ -273,11 +306,11 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
             if ($an === 'PRIMARY') {
                 continue;
             }
-            if (isset(static::indexes()[$an])) {
+            if (isset($declaredIdx[$an])) {
                 continue;
             }
             $equivalent = false;
-            foreach (static::indexes() as $idx) {
+            foreach ($declaredIdx as $idx) {
                 $cols = (array) ($idx['columns'] ?? []);
                 $unique = !empty($idx['unique']);
                 if (static::indexEquivalent($ai, $cols, $unique, $strictIndex)) {
@@ -366,7 +399,7 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
             if ($def === null) {
                 throw new LogicException('未知列: ' . $name);
             }
-            $exists = isset($adapter->actualColumns($conn, $table)[$name]);
+            $exists = isset(static::readActualColumns($conn, $table, $adapter)[$name]);
             Schema::connection($conn)->table($table, function (Blueprint $t) use ($adapter, $name, $def, $exists) {
                 $col = $adapter->buildColumn($t, $name, $def);
                 if ($exists) {
@@ -379,14 +412,16 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
 
         if (strpos($key, 'index.') === 0) {
             $name = substr($key, 6);
-            $idx = static::indexes()[$name] ?? null;
+            $idx = static::declaredIndexes()[$name] ?? null;
             if ($idx === null) {
                 throw new LogicException('未知索引: ' . $name);
             }
             $cols = (array) ($idx['columns'] ?? []);
             $unique = !empty($idx['unique']);
-            $actual = $adapter->actualIndexes($conn, $table);
-            $createName = $adapter->resolveIndexName($name, $table, $conn);
+            $actual = static::readActualIndexes($conn, $table, $adapter);
+            $createName = PreviewContext::remember('index.name.' . $name, function () use ($adapter, $name, $table, $conn) {
+                return $adapter->resolveIndexName($name, $table, $conn);
+            });
             Schema::connection($conn)->table($table, function (Blueprint $t) use ($name, $cols, $unique, $actual, $createName) {
                 if (isset($actual[$name])) {
                     $t->dropIndex($name);
@@ -415,7 +450,7 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
 
         if (strpos($key, 'extra_index.') === 0) {
             $name = substr($key, 12);
-            if (isset(static::indexes()[$name])) {
+            if (isset(static::declaredIndexes()[$name])) {
                 throw new LogicException('拒绝删除已声明索引: ' . $name);
             }
             if ($name === 'PRIMARY') {
@@ -434,13 +469,107 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
     /**
      * 预览修复将要执行的 SQL（使用连接层 pretend 模式，不落库）。
      *
-     * @return array<int, string> 将要执行的 SQL 语句（仅写操作，已内联绑定值）
+     * pretend 期间所有 SELECT 返回空，因此先把 fix() 依赖的列/索引元数据在真实连接上读好
+     * 放进预览上下文，pretend 内命中缓存——否则已存在的列会被预览成 add、索引漏掉 drop。
+     *
+     * @return array<int, array{query: string, bindings: array<int, mixed>}> 将要执行的写 SQL（已过滤判重/元数据读）
      */
     public static function preview(string $key): array
     {
-        return DB::connection(static::connectionName())->pretend(function () use ($key) {
-            static::fix($key);
+        $conn = static::connectionName();
+        $table = static::table();
+
+        PreviewContext::begin();
+        try {
+            if (strpos($key, 'column.') === 0) {
+                static::readActualColumns($conn, $table, AdapterFactory::make($conn));
+            } elseif (strpos($key, 'index.') === 0) {
+                $adapter = AdapterFactory::make($conn);
+                $name = substr($key, 6);
+                static::readActualIndexes($conn, $table, $adapter);
+                PreviewContext::remember('index.name.' . ($conn ?? 'default') . '.' . $table . '.' . $name, function () use ($adapter, $name, $table, $conn) {
+                    return $adapter->resolveIndexName($name, $table, $conn);
+                });
+            }
+
+            return PreviewContext::writeStatements(DB::connection($conn)->pretend(function () use ($key) {
+                static::fix($key);
+            }));
+        } finally {
+            PreviewContext::end();
+            // 预览抛错时 Laravel 8 的 pretend() 不会复位 pretending，必须兜底（否则后续写全部静默跳过）
+            DatabaseCompat::stopPretending($conn);
+        }
+    }
+
+    /**
+     * 读取实际列结构（预览上下文内命中缓存，避免 pretend 下读到空数组）。
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    protected static function readActualColumns(?string $conn, string $table, DatabaseAdapter $adapter): array
+    {
+        return PreviewContext::remember('columns.' . ($conn ?? 'default') . '.' . $table, function () use ($adapter, $conn, $table) {
+            return $adapter->actualColumns($conn, $table);
         });
+    }
+
+    /**
+     * 读取实际索引结构（预览上下文内命中缓存）。
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    protected static function readActualIndexes(?string $conn, string $table, DatabaseAdapter $adapter): array
+    {
+        return PreviewContext::remember('indexes.' . ($conn ?? 'default') . '.' . $table, function () use ($adapter, $conn, $table) {
+            return $adapter->actualIndexes($conn, $table);
+        });
+    }
+
+    /**
+     * 归一化并校验索引声明（必须是 name => ['columns' => [...], 'unique' => bool] 映射）。
+     *
+     * 旧实现（v338 之前）的 indexes() 是 list + 每项带 name，迁移时若漏改形态，
+     * 数值下标会被当成索引名建出名为 "0"/"1" 的索引，且 check 不会报错——这里显式拒绝。
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    protected static function declaredIndexes(): array
+    {
+        $out = [];
+        foreach (static::indexes() as $name => $idx) {
+            if (is_int($name)) {
+                throw new LogicException(
+                    '表 ' . static::table() . ' 的 indexes() 必须返回「索引名 => [columns, unique]」映射，'
+                    . '收到整数下标 ' . $name . '（疑似旧 list + name 形态，请改为以索引名作键）'
+                );
+            }
+            if (!is_array($idx) || (isset($idx['name']) && !isset($idx['columns']))) {
+                throw new LogicException(
+                    '表 ' . static::table() . ' 的索引声明 ' . $name . ' 形态不合法：'
+                    . '应为 [\'columns\' => [...], \'unique\' => bool]，不要在内层再写 name'
+                );
+            }
+            // 裸列数组（如 ['uk_status' => ['status']]，漏写 columns 键）会被当成空列索引：
+            // check 永远报「索引缺失」，fix 生成 create index ... () 直接 SQL 语法错误——必须当场拒绝。
+            $columns = $idx['columns'] ?? null;
+            if (!is_array($columns) || $columns === []) {
+                throw new LogicException(
+                    '表 ' . static::table() . ' 的索引声明 ' . $name . ' 缺少有效的 columns：'
+                    . 'columns 必须是非空列名字符串数组'
+                );
+            }
+            foreach ($columns as $column) {
+                if (!is_string($column) || $column === '') {
+                    throw new LogicException(
+                        '表 ' . static::table() . ' 的索引声明 ' . $name . ' 的 columns 必须是非空列名字符串数组'
+                    );
+                }
+            }
+            $out[(string) $name] = $idx;
+        }
+
+        return $out;
     }
 
     /**
@@ -466,7 +595,7 @@ abstract class AbstractTableCheck implements DbCheckInterface, TableSchemaProvid
                     $table->primary($name);
                 }
             }
-            foreach (static::indexes() as $name => $idx) {
+            foreach (static::declaredIndexes() as $name => $idx) {
                 $cols = (array) ($idx['columns'] ?? []);
                 if (!empty($idx['unique'])) {
                     $table->unique($cols, (string) $name);

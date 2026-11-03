@@ -4,6 +4,7 @@ namespace Dongasai\Dbcheck\Tests;
 
 use Dongasai\Dbcheck\Adapters\DbDriver;
 use Dongasai\Dbcheck\Support\DbCheckRegistry;
+use Dongasai\Dbcheck\Support\PreviewContext;
 use Illuminate\Config\Repository;
 use Illuminate\Container\Container;
 use Illuminate\Database\Capsule\Manager as Capsule;
@@ -66,15 +67,17 @@ abstract class TestCase extends BaseTestCase
 
         DbCheckRegistry::clear();
         DbDriver::override(null);
+        PreviewContext::reset();
     }
 
     /**
-     * 清理静态状态（注册表 / 驱动覆盖 / facade）。
+     * 清理静态状态（注册表 / 驱动覆盖 / 预览上下文 / facade）。
      */
     protected function tearDown(): void
     {
         DbDriver::override(null);
         DbCheckRegistry::clear();
+        PreviewContext::reset();
         Facade::clearResolvedInstances();
 
         parent::tearDown();

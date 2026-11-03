@@ -3,7 +3,9 @@
 namespace Dongasai\Dbcheck\Checks;
 
 use Dongasai\Dbcheck\Contracts\DbCheckInterface;
+use Dongasai\Dbcheck\Support\DatabaseCompat;
 use Dongasai\Dbcheck\Support\DbCheckGroup;
+use Dongasai\Dbcheck\Support\PreviewContext;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use LogicException;
@@ -173,6 +175,8 @@ abstract class AbstractTableDataCheck implements DbCheckInterface
         }
 
         $where = (array) ($def['where'] ?? []);
+
+        // 已存在则短路（fix 的幂等语义）：不比对、不回写、不执行 insert_merge
         if (static::rowExists($where)) {
             return;
         }
@@ -193,19 +197,44 @@ abstract class AbstractTableDataCheck implements DbCheckInterface
             $data['updated_at'] = $data['updated_at'] ?? $now;
         }
 
+        // 不用 insertOrIgnore（PG 系会编译成无冲突目标的 on conflict do nothing，部分库不支持）
         DB::connection(static::connectionName())->table(static::table())->insert($data);
     }
 
     /**
      * 预览插入 SQL（pretend 模式，不落库）。
      *
-     * @return array<int, string>
+     * pretend 期间 SELECT 返回空，因此先把判重行（fix 经 rowExists() 判重）
+     * 与 insert_merge 引用的行在真实连接上读好放进预览上下文：
+     * 已存在的行预览不再误出 INSERT，引用行也能取到真实值。
+     *
+     * @return array<int, array{query: string, bindings: array<int, mixed>}> 将要执行的写 SQL（已过滤判重 SELECT）
      */
     public static function preview(string $key): array
     {
-        return DB::connection(static::connectionName())->pretend(function () use ($key) {
-            static::fix($key);
-        });
+        $def = static::rows()[$key] ?? null;
+
+        PreviewContext::begin();
+        try {
+            if ($def !== null) {
+                // 判重读预热：已存在则 pretend 内 fix() 直接短路，与真实修复同口径
+                static::rowExists((array) ($def['where'] ?? []));
+                // insert_merge 引用的行：fix 会读它们取列值，pretend 下需预热
+                foreach ((array) ($def['insert_merge'] ?? []) as $val) {
+                    if (is_array($val) && isset($val['where'])) {
+                        static::findRow((array) $val['where']);
+                    }
+                }
+            }
+
+            return PreviewContext::writeStatements(DB::connection(static::connectionName())->pretend(function () use ($key) {
+                static::fix($key);
+            }));
+        } finally {
+            PreviewContext::end();
+            // 预览抛错时 Laravel 8 的 pretend() 不会复位 pretending，必须兜底（否则后续写全部静默跳过）
+            DatabaseCompat::stopPretending(static::connectionName());
+        }
     }
 
     /**
@@ -236,24 +265,31 @@ abstract class AbstractTableDataCheck implements DbCheckInterface
     }
 
     /**
-     * 判定行是否存在。
+     * 判定行是否存在（判重读经 PreviewContext 缓存，预览内与 fix 同口径）。
      *
      * @param array<string, mixed> $where
      */
     protected static function rowExists(array $where): bool
     {
-        return static::findRow($where) !== null;
+        return DatabaseCompat::rowExists(static::table(), $where, static::connectionName());
     }
 
     /**
-     * 按 where 取首行。
+     * 按 where 取首行（预览上下文内命中缓存，避免 pretend 下读到空行）。
      *
      * @param array<string, mixed> $where
      * @return object|null
      */
     protected static function findRow(array $where)
     {
-        return DB::connection(static::connectionName())->table(static::table())->where($where)->first();
+        $conn = static::connectionName();
+
+        return PreviewContext::remember(
+            'row.' . ($conn ?? 'default') . '.' . static::table() . '.' . json_encode($where),
+            function () use ($where, $conn) {
+                return DB::connection($conn)->table(static::table())->where($where)->first();
+            }
+        );
     }
 
     /**

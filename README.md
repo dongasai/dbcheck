@@ -29,7 +29,8 @@
   - 固定数据 `AbstractTableDataCheck`：必需数据行缺则插；可选删除验证 `deleteExtra()` 报未声明的多余行
   - 字段明细 `AbstractTableFieldCheck`：声明字段的标量值 / JSON 数组项是否齐全，只补缺失
 - **多驱动适配**：MySQL / MySQL8 / PostgreSQL / SQLite，按连接自动判断、参数可覆盖；比对深度由驱动决定（MySQL 精确比对，PG/SQLite 仅存在性，防误报）
-- **SQL 预览**：修复前以 pretend 模式预览将执行的写 SQL（内联绑定值、排版），绝不静默写库
+- **SQL 预览**：修复前以 pretend 模式预览将执行的写 SQL（命令侧内联绑定值、排版展示），绝不静默写库；预览前先预热真实元数据，改列不会误报成加列、索引不会漏 drop、已存在的数据行不会误出 INSERT；预览 SQL 不改写字面量（含 `?`/多空格的字符串原样展示）
+- **自检可信度保护**：运行前打印发现到的检查器数量（含分组明细），扫描根配错导致 0 个检查器时直接告警并返回失败；`--group` 拼错（含多个分组时部分拼错）或默认集合里全是分组检查器（零执行）同样失败——避免「静默全绿」被误当验收通过
 - **分组与专用入口**：`dbcheck:seed` 播种种子数据（`SEEDER` 分组）、`dbcheck:delete` 清理多余行（`DELETE` 分组）——补与删职责正交
 - **扫描根匹配模式**：`Modules/*/DbChecks` 一条声明覆盖全部惯例目录，新模块建目录即自动纳入
 - **agent 友好**：`dbcheck:skill` 把编写指南注册为 agent skill，适合 AI 参与的工程流程
@@ -41,6 +42,8 @@ composer require dongasai/dbcheck
 ```
 
 服务提供者经 composer `extra.laravel.providers` 自动发现，无需手动注册。
+
+> 兼容性提示：在 Laravel 8 / 9 等未内置原生列修改的版本上，修复已有列（`column.*` 整列重写，底层 `Blueprint::change()`）需要安装 `doctrine/dbal`（`composer.json` 的 `suggest` 已声明）；较新的 Laravel 已内置原生列修改，无需该包。
 
 本地开发可用 path 仓库接入宿主项目：
 
@@ -129,7 +132,8 @@ class UserProfilesTableCheck extends AbstractTableCheck
 }
 ```
 
-- `type` 一律用 `Dongasai\Dbcheck\Support\ColumnType` 常量（22 种，含 `ENUM` 配 `values` 键）
+- `type` 必须显式声明，一律用 `Dongasai\Dbcheck\Support\ColumnType` 常量（22 种，含 `ENUM` 配 `values` 键）；缺 `type` 键会抛 `LogicException`，不会被静默按 string 建列
+- `indexes()` 必须返回「索引名 => [columns, unique]」映射；旧 list + name 形态会抛 `LogicException`（防止整数下标被当成索引名）
 - `'primary' => true` 声明主键（`ColumnType::ID` 自带）；`comment` 仅建表生效不参与比对
 - 固定数据 / 字段明细的声明写法见 [resources/skill/dbcheck/SKILL.md](resources/skill/dbcheck/SKILL.md)（可经 `dbcheck:skill` 注册为 agent skill）
 
@@ -163,7 +167,8 @@ php artisan dbcheck:check                    # 交互：逐条预览 SQL → 确
 | `--adapter=` | 驱动覆盖：别名 `mysql8/mysql/mariadb/mysql57/pgsql/postgres/sqlite` 或适配器类名（默认自动探测） |
 | `--fix-flow=batch\|inline` | 修复节奏：batch=先全量报告（默认）；inline=边查边修（仅交互） |
 | `--group=*` / `--all-groups` | 分组执行（分组由 `group()` 声明） |
-| `--detail` / `--db-write` | db 自检详细输出 / 执行临时表读写自检（默认只读） |
+| `--detail` / `--db-write` | db 自检详细输出 / 执行临时表读写自检（默认只读）；fields 检查时 `--detail` 还会打印各扫描根命中数（定位「声明了但没扫到」） |
+| `--strict` | 非交互模式下可选处理项（额外列/额外索引）也按失败返回（默认只报不判失败） |
 
 ## 驱动适配
 
@@ -177,10 +182,10 @@ php artisan dbcheck:check                    # 交互：逐条预览 SQL → 确
 ## 测试
 
 ```bash
-composer test        # 或 phpunit --bootstrap tests/bootstrap.php tests
+composer test        # = phpunit --bootstrap tests/bootstrap.php tests
 ```
 
-Unit 6 只（列类型/注册表/驱动判断/三类检查逻辑）+ Integration 5 只（SQLite 全链：建表比对修复、固定数据、删除验证、播种分组、字段明细），共 102 用例。
+Unit 8 只（列类型/注册表/驱动判断/三类检查逻辑/预览上下文/预览 SQL 保真）+ Integration 6 只（SQLite 全链：建表比对修复、固定数据、删除验证、播种分组、字段明细、命令级退出码/预览），共 149 用例。
 
 > 注意：tests/bootstrap.php 用 Capsule 起最小容器；在「全套 Laravel 宿主」的 vendor 下运行需先补 `db.schema` 容器绑定。
 

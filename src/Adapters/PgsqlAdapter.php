@@ -5,6 +5,7 @@ namespace Dongasai\Dbcheck\Adapters;
 use Dongasai\Dbcheck\Support\ColumnType;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
+use LogicException;
 
 /**
  * PostgreSQL 适配器。
@@ -43,7 +44,7 @@ class PgsqlAdapter extends DatabaseAdapter
      */
     public function buildColumn(Blueprint $table, string $name, array $def)
     {
-        $type = $def['type'] ?? ColumnType::DEFAULT;
+        $type = $this->declaredType($def);
 
         switch ($type) {
             case ColumnType::ID:
@@ -104,7 +105,7 @@ class PgsqlAdapter extends DatabaseAdapter
                 $col = $table->enum($name, array_map('strval', (array) ($def['values'] ?? [])));
                 break;
             default:
-                throw new \InvalidArgumentException('未知的列类型声明: ' . $type);
+                throw new LogicException('未知的列类型声明: ' . $type);
         }
 
         if (!empty($def['nullable'])) {
@@ -132,7 +133,7 @@ class PgsqlAdapter extends DatabaseAdapter
     public function expectedColumnType(array $def): string
     {
         // PG 仅做存在性比对，期望类型不参与严格比较；返回声明类型的小写形式即可。
-        return strtolower($def['type'] ?? ColumnType::DEFAULT);
+        return strtolower($this->declaredType($def));
     }
 
     /**

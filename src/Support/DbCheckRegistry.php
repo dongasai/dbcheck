@@ -170,6 +170,93 @@ class DbCheckRegistry
     }
 
     /**
+     * 按继承的抽象基类统计检查器数量（诊断用；不抛异常）。
+     *
+     * 直接实现 DbCheckInterface 却未继承任一抽象基类的类计入 unknown——
+     * 与 grouped() 的 LogicException 口径不同：计数只用于展示，不能让诊断信息本身崩栈。
+     *
+     * @return array{table: int, data: int, field: int, unknown: int, total: int}
+     */
+    public static function counts(): array
+    {
+        $counts = [
+            'table' => 0,
+            'data' => 0,
+            'field' => 0,
+            'unknown' => 0,
+            'total' => 0,
+        ];
+
+        foreach (static::all() as $c) {
+            $ref = new \ReflectionClass($c);
+
+            if ($ref->isSubclassOf(AbstractTableCheck::class)) {
+                $counts['table']++;
+            } elseif ($ref->isSubclassOf(AbstractTableDataCheck::class)) {
+                $counts['data']++;
+            } elseif ($ref->isSubclassOf(AbstractTableFieldCheck::class)) {
+                $counts['field']++;
+            } else {
+                $counts['unknown']++;
+            }
+            $counts['total']++;
+        }
+
+        return $counts;
+    }
+
+    /**
+     * 诊断用：逐条报告配置扫描根的展开与命中情况。
+     *
+     * 复用 expandRoot()（通配根展开为多条具体根）与 scanRoot()（递归扫描类名）：
+     * 通配模板根无匹配目录时报告一条 matched=false / count=0，便于发现
+     * 「扫描根声明了但目录不存在 / 命名空间拼错导致 class_exists 不通过」。
+     *
+     * @return array<int, array{path: string, namespace: string, matched: bool, count: int}>
+     */
+    public static function scanRoots(): array
+    {
+        $out = [];
+        $scan = (array) config('dbcheck.scan', []);
+        // 与 all() 同口径过滤（抽象/未实现接口/$enabled=false 不计入），
+        // 否则「命中 n 个」会大于「发现 N 个检查器」，在诊断「声明了但没扫到」时误导。
+        $available = array_flip(static::all());
+
+        foreach ($scan as $root) {
+            $path = (string) ($root['path'] ?? '');
+            $ns = (string) ($root['namespace'] ?? '');
+
+            $concrete = static::expandRoot($path, $ns);
+            if ($concrete === []) {
+                // 模板根无匹配目录（或 path/namespace 未声明）：原样报告未命中
+                $out[] = [
+                    'path' => $path,
+                    'namespace' => $ns,
+                    'matched' => false,
+                    'count' => 0,
+                ];
+                continue;
+            }
+
+            foreach ($concrete as $one) {
+                $found = [];
+                static::scanRoot($one['path'], $one['namespace'], $found);
+                $checkers = array_values(array_filter($found, static function ($class) use ($available) {
+                    return isset($available[$class]);
+                }));
+                $out[] = [
+                    'path' => $one['path'],
+                    'namespace' => $one['namespace'],
+                    'matched' => true,
+                    'count' => count($checkers),
+                ];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * 递归扫描配置声明的目录根，推导类名。
      *
      * 扫描根支持「匹配模式」：path / namespace 中含 `*`（path 至多一个）时按 glob

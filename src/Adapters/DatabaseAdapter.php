@@ -4,6 +4,7 @@ namespace Dongasai\Dbcheck\Adapters;
 
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
+use LogicException;
 
 /**
  * 数据库驱动适配器抽象基类。
@@ -58,6 +59,23 @@ abstract class DatabaseAdapter
      * @return array<string, array{unique: bool, columns: array<int, string>}>
      */
     abstract public function actualIndexes(?string $connection, string $table): array;
+
+    /**
+     * 取列声明中的 type（强制显式声明）。
+     *
+     * 缺失 type 时显式抛 LogicException，而不是静默按 string 建列——
+     * 漏写/拼错 type 的声明必须当场暴露，否则会静默建出 varchar 并在比对时永远「一致」。
+     *
+     * @param array<string, mixed> $def
+     */
+    protected function declaredType(array $def): string
+    {
+        if (!array_key_exists('type', $def) || $def['type'] === null || $def['type'] === '') {
+            throw new LogicException('列声明缺少 type 键：必须用 Dongasai\Dbcheck\Support\ColumnType 常量显式声明列类型');
+        }
+
+        return (string) $def['type'];
+    }
 
     /**
      * 默认值是否一致（驱动无关，共享实现）。

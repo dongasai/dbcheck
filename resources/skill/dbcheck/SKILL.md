@@ -114,6 +114,8 @@ public static function indexes(): array
 }
 ```
 
+必须是「索引名 => [columns, unique]」映射。旧版 list + 每项带 `name` 的写法已不支持，会抛 `LogicException`（否则整数下标会被当成索引名建出名为 `0` 的索引）。
+
 ## 固定数据 / 字段明细声明
 
 `DataCheck::rows()`（固定数据）每项：
@@ -221,7 +223,9 @@ php artisan dbcheck:check --adapter=mysql57   # 5.7 等无原生 JSON 的旧版�
 ```bash
 php artisan dbcheck:init                        # 把包内配置发布到项目 config/dbcheck.php
 php artisan dbcheck:check                       # 交互：先看 SQL 再确认修复
-php artisan dbcheck:check --no-interaction      # 只报告，零变更
+php artisan dbcheck:check --no-interaction      # 只报告，零变更（全部为可选处理项时退出码 0，加 --strict 则按失败返回）
+php artisan dbcheck:check --no-interaction --strict  # 非交互下把额外列/额外索引也判为失败（严格口径）
+php artisan dbcheck:check --detail              # 打印扫描根命中数（定位「声明了但没扫到」）
 php artisan dbcheck:check --group=testdata      # 只跑指定分组
 php artisan dbcheck:check --all-groups          # 跑全部分组
 php artisan dbcheck:check --connection=mysql    # 指定数据库连接名（默认用 database.default；显式声明连接的检查器不受影响）
@@ -240,7 +244,10 @@ php artisan dbcheck:seed --no-interaction       # 只报告播种项，零变更
 ## 边界
 
 - 不做破坏性修复：行差异只 `ADD COLUMN` / `CHANGE COLUMN` / `ADD INDEX` / 同名索引重建；唯一例外是数据删除——仅当 DataCheck 显式开启 `deleteExtra()` 时才删未声明的多余行，且该检查器默认隔离在 `delete` 分组。
-- 额外列 / 额外索引交互询问且**默认不处理**，非交互只报告、不计错误。
+- 额外列 / 额外索引交互询问且**默认不处理**；非交互只报告——全部为可选项时退出码 0（加 `--strict` 按失败返回），含必修复项才非 0。
+- 运行前会打印「发现 N 个检查器（含分组明细）」；扫描根/命名空间配错导致 **0 个检查器时直接告警并返回失败**，不会静默全绿——看到该告警先查 `config/dbcheck.php` 的 `scan` 与类命名空间。
+- `--group` 拼错（含多个分组时部分拼错）同样返回失败；默认集合里没有常规检查器（全部在分组内）时也会告警并按失败返回（提示用 `--group=<名>` / `--all-groups`），不会假装「检查通过」。
+- 列声明必须显式写 `type`（`ColumnType` 常量），缺失会抛 `LogicException`，不会静默按 string 建列。
 - 不比较注释、`AUTO_INCREMENT`、主键；表级字符集/排序规则按**声明制**：`charset()`/`collation()` 声明了才比对（未声明不比对）。
 - 索引按「类型（唯一/普通）+ 字段」判存在，**索引名不作为存在依据**（避免重复建）。
 

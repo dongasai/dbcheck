@@ -8,7 +8,7 @@
 
 | 文件 | 职责 |
 |------|------|
-| DatabaseAdapter.php | 抽象基类：driverLabel / comparesColumnAttributes / comparesIndexAttributes / buildColumn / normalizeColumnType / expectedColumnType / actualIndexes / actualColumns / actualTableCharset（默认 null=不支持表编码读取）/ defaultMatches / resolveIndexName |
+| DatabaseAdapter.php | 抽象基类：driverLabel / comparesColumnAttributes / comparesIndexAttributes / buildColumn / normalizeColumnType / expectedColumnType / actualIndexes / actualColumns / actualTableCharset（默认 null=不支持表编码读取）/ defaultMatches / resolveIndexName；`declaredType()` 统一取列声明 type（缺 type 键抛 LogicException，不静默回落 string） |
 | DbDriver.php | 数据库类型判断：**显式参数 > 运行期覆盖（override() / --adapter=）> 按连接自动探测**（mysql/mariadb → Mysql8，pgsql/postgres → Pgsql，sqlite → Sqlite）；detect() 返回 Laravel 驱动名；supports() 校验别名/类名；adapterClass() 只解析类名不实例化（诊断命令用）；未知值抛 InvalidArgumentException。适配器映射不做配置化硬编码 |
 | AdapterFactory.php | 稳定入口：转发 DbDriver::adapter()（可传第二参 $override 显式指定），保持检查器调用面不变 |
 | MysqlAdapter.php | MySQL 5.7 等无原生 JSON：json → longText；列/索引属性精确比对；表编码读取（information_schema.TABLES + COLLATIONS）；ENUM 建列/期望类型按 `enum('a','b')` 口径 |
@@ -18,6 +18,7 @@
 
 ## 要点
 
+- **列类型必须显式声明**：buildColumn() / expectedColumnType() 经 `declaredType()` 取 `type`，缺失即抛 LogicException（不静默按 string 建列）；未知类型同样抛 LogicException。
 - **判断优先级**：显式参数（`AdapterFactory::make($connection, $override)`，别名或类名）> 运行期覆盖（`DbDriver::override()`，命令行 `--adapter=`）> 自动探测；别名 mysql/mysql8/mariadb → Mysql8，mysql57 → MysqlAdapter（5.7 旧版），pgsql/postgres → Pgsql，sqlite → Sqlite。
 - **比对深度开关**：comparesColumnAttributes() / comparesIndexAttributes()——MySQL 系 true；PG false（类型口径差异大，精确比对必大量误报）；SQLite 列 false（动态类型 + grammar 漂移）、索引 true（PRAGMA 能稳定读唯一性和列序）。
 - **表编码读取**：actualTableCharset() 基类默认返回 null（= 不支持，检查器声明 charset()/collation() 才会触发），MySQL 系覆写实现；PG 继承默认值，编码比对自动跳过。

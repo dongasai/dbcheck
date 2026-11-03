@@ -15,7 +15,8 @@ use Illuminate\Support\Facades\Schema;
  *
  * 用法：
  *   php artisan dbcheck:check                    # 交互：逐项询问是否修复（先看 SQL 再确认）
- *   php artisan dbcheck:check --no-interaction  # 只报告，不执行任何变更
+ *   php artisan dbcheck:check --no-interaction  # 只报告，不执行任何变更（可选处理项全部命中时返回成功；未执行任何检查按失败返回）
+ *   php artisan dbcheck:check --no-interaction --strict  # 可选处理项（额外列/额外索引）也按失败返回
  *   php artisan dbcheck:check --check=db         # 只做数据库连接/类型/适配器自检（默认只读）
  *   php artisan dbcheck:check --check=all --detail --db-write  # 库自检 + 结构/数据检查，含连接参数与读写测试
  *   php artisan dbcheck:check --group=testdata  # 只执行 testdata 分组（即播种测试数据）
@@ -40,6 +41,12 @@ use Illuminate\Support\Facades\Schema;
  *
  * 执行顺序：数据库检查（若启用）→ 表结构 → 固定数据 → 字段明细（按 DbCheckRegistry::grouped()）。
  * 每张检查器返回异常项，交互模式下先预览 SQL 再确认执行，执行后自动复检。
+ *
+ * 可信度保护：先打印发现计数（表结构/固定数据/字段明细各几个、分组明细、未归类数），
+ * 0 个检查器时告警并按失败返回——避免扫描根/命名空间配错被误判为「检查通过」；
+ * 选择器零命中（--group 拼错、或默认集合里全是分组检查器）同样按失败返回（零执行不得当通过）；
+ * --detail 逐条打印扫描根命中情况（与发现计数同口径，过滤非检查器/禁用类）；
+ * 归类异常（如直接实现接口未继承基类）捕获后按失败返回。
  */
 class CheckInfoCommand extends Command
 {
@@ -55,8 +62,9 @@ class CheckInfoCommand extends Command
         {--fix-flow= : 修复节奏：batch=先全量报告后逐条修复（默认）；inline=边查边修（仅交互模式生效）}
         {--group=* : 只执行指定分组（可多次），如 --group=testdata}
         {--all-groups : 执行全部分组（含 testdata）}
-        {--detail : 详细输出（数据库检查打印连接参数）}
-        {--db-write : 数据库检查时执行临时表读写自检（会建/删临时表；默认只读）}';
+        {--detail : 详细输出（数据库检查打印连接参数；结构检查打印扫描根命中情况）}
+        {--db-write : 数据库检查时执行临时表读写自检（会建/删临时表；默认只读）}
+        {--strict : 非交互模式下可选处理项（额外列/额外索引）也按失败处理}';
 
     /**
      * 命令描述。
@@ -143,24 +151,90 @@ class CheckInfoCommand extends Command
 
         $wanted = array_values(array_filter(array_map('strval', (array) $this->option('group'))));
         $allGroups = (bool) $this->option('all-groups');
+        $strict = (bool) $this->option('strict');
 
-        if ($allGroups) {
-            $groups = DbCheckRegistry::grouped(null, true);
-        } elseif (count($wanted) > 0) {
-            // 指定了分组：合并多个分组的检查器（去重，保持类别顺序）
-            $groups = ['table' => [], 'data' => [], 'field' => []];
-            foreach ($wanted as $g) {
-                foreach (DbCheckRegistry::grouped($g) as $k => $list) {
-                    foreach ($list as $c) {
-                        if (!in_array($c, $groups[$k], true)) {
-                            $groups[$k][] = $c;
+        // 发现计数（P0-1）：0 个检查器时「检查通过」不可信，必须先亮出发现数量与分组明细
+        try {
+            $counts = DbCheckRegistry::counts();
+            $groupCounts = DbCheckRegistry::groups();
+        } catch (\Throwable $e) {
+            $this->error('检查器发现失败: ' . $e->getMessage());
+
+            return self::FAILURE;
+        }
+
+        $this->line($this->describeCounts($counts, $groupCounts));
+
+        if ($this->option('detail')) {
+            $this->printScanRoots();
+        }
+
+        if ($counts['total'] === 0) {
+            $this->warn('未发现任何检查器：请检查 config/dbcheck.php 的 scan 根与类命名空间（0 个检查器时「检查通过」不可信）');
+
+            return self::FAILURE;
+        }
+
+        // 归类（P2-2）：直接实现接口未继承基类等归类异常不崩栈，转成明确的失败返回
+        try {
+            if ($allGroups) {
+                $groups = DbCheckRegistry::grouped(null, true);
+            } elseif (count($wanted) > 0) {
+                // 指定了分组：合并多个分组的检查器（去重，保持类别顺序）
+                $groups = ['table' => [], 'data' => [], 'field' => []];
+                foreach ($wanted as $g) {
+                    foreach (DbCheckRegistry::grouped($g) as $k => $list) {
+                        foreach ($list as $c) {
+                            if (!in_array($c, $groups[$k], true)) {
+                                $groups[$k][] = $c;
+                            }
                         }
                     }
                 }
+            } else {
+                // 未指定：只执行「常规」（group() 返回 null）的检查器，排除 testdata 等分组
+                $groups = DbCheckRegistry::grouped(null);
             }
-        } else {
-            // 未指定：只执行「常规」（group() 返回 null）的检查器，排除 testdata 等分组
-            $groups = DbCheckRegistry::grouped(null);
+        } catch (\Throwable $e) {
+            $this->error('检查器归类失败: ' . $e->getMessage());
+
+            return self::FAILURE;
+        }
+
+        // 选择器零命中：--group 拼错 / 默认集合全空都属「一个检查都没跑」——
+        // 与「0 个检查器」同口径按失败返回（CI 里绝不能把未执行当通过）；多个 --group 时逐个校验，
+        // 部分拼错也要报（否则拼错的那个被静默忽略）。
+        if ($wanted !== []) {
+            $missed = [];
+            foreach ($wanted as $group) {
+                if (($groupCounts[$group] ?? 0) === 0) {
+                    $missed[] = $group;
+                }
+            }
+            if ($missed !== []) {
+                $this->error('--group 未命中任何检查器: ' . implode(',', $missed)
+                    . '（已发现 ' . $counts['total'] . ' 个检查器'
+                    . ($groupCounts !== [] ? '；可用分组: ' . implode(',', array_keys($groupCounts)) : '')
+                    . '）请核对分组名');
+
+                return self::FAILURE;
+            }
+        }
+
+        $selected = count($groups['table']) + count($groups['data']) + count($groups['field']);
+        if ($selected === 0) {
+            $this->warn('未发现常规检查器：已发现的 ' . $counts['total'] . ' 个检查器均声明了分组，'
+                . '需用 --group=<名> 或 --all-groups 显式触发（本次未执行任何检查，按失败返回）');
+
+            return self::FAILURE;
+        }
+
+        // 未知驱动降级提示：无可用适配器时该表结构只做存在性比对（降级行为在 AbstractTableCheck），
+        // 必须逐个检查器按各自 connectionName() 判定并显式提示，避免「没比对」被当成「比对通过」。
+        foreach ($groups['table'] as $class) {
+            if (!$class::hasAdapter()) {
+                $this->warn($class::moduleName() . ' · 当前连接无可用适配器：表结构检查降级为仅存在性比对（可用 --adapter= 指定适配器）');
+            }
         }
 
         // inline：边查边修（每个检查器查完若有异常，立即逐条确认修复）；非交互无修复动作，统一走 batch 报告
@@ -200,13 +274,28 @@ class CheckInfoCommand extends Command
         }
 
         if (empty($allIssues) && $failedChecks === 0) {
+            if ($dbErrors > 0) {
+                // 数据库检查失败时不能打印「检查通过」却又返回 FAILURE（文案与退出码矛盾）
+                $this->error('结构/数据检查未发现异常，但数据库检查未通过（见上方数据库检查结果）');
+
+                return self::FAILURE;
+            }
+
             $this->info('结构/数据检查通过，无异常。');
 
-            return $dbErrors > 0 ? self::FAILURE : self::SUCCESS;
+            return self::SUCCESS;
+        }
+
+        $optionalCount = 0;
+        foreach ($allIssues as $it) {
+            if (!empty($it['issue']['optional'])) {
+                $optionalCount++;
+            }
         }
 
         $this->newLine();
         $this->error('发现 ' . count($allIssues) . ' 个异常'
+            . ($optionalCount > 0 ? '（其中可选处理项 ' . $optionalCount . ' 个）' : '')
             . ($failedChecks > 0 ? '，' . $failedChecks . ' 个检查器执行失败' : ''));
         if (!empty($allIssues)) {
             $this->line('错误明细:');
@@ -220,6 +309,23 @@ class CheckInfoCommand extends Command
         if ($noInteraction) {
             $this->previewAll($allIssues);
 
+            // 可选处理项（额外列/额外索引）默认不处理：非交互模式全部为可选项、无检查器执行失败、
+            // 无数据库检查失败时按成功返回，避免「库中只要有多余列/索引就永远非 0」（P1-4）；
+            // --strict 时恢复严格口径（可选项也按失败处理）。
+            $optionalOnly = $failedChecks === 0;
+            foreach ($allIssues as $it) {
+                if (empty($it['issue']['optional'])) {
+                    $optionalOnly = false;
+                    break;
+                }
+            }
+
+            if ($optionalOnly && !$strict && $dbErrors === 0) {
+                $this->info('可选处理项 ' . $optionalCount . ' 个，默认不处理（加 --strict 时按失败返回）');
+
+                return self::SUCCESS;
+            }
+
             return self::FAILURE;
         }
 
@@ -231,6 +337,57 @@ class CheckInfoCommand extends Command
         }
 
         return ($errorCount + $dbErrors) > 0 ? self::FAILURE : self::SUCCESS;
+    }
+
+    /**
+     * 生成「发现 N 个检查器」汇总行（含分组明细与未归类数）。
+     *
+     * @param array{table: int, data: int, field: int, unknown: int, total: int} $counts
+     * @param array<string, int> $groups 分组名 => 数量
+     */
+    protected function describeCounts(array $counts, array $groups): string
+    {
+        $line = '发现 ' . $counts['total'] . ' 个检查器（表结构 ' . $counts['table']
+            . ' / 固定数据 ' . $counts['data'] . ' / 字段明细 ' . $counts['field'] . '）';
+
+        if ($groups !== []) {
+            $parts = [];
+            foreach ($groups as $name => $n) {
+                $parts[] = $name . '(' . $n . ')';
+            }
+            $line .= '；分组：' . implode(', ', $parts);
+        }
+
+        if ($counts['unknown'] > 0) {
+            $line .= '；未归类 ' . $counts['unknown'];
+        }
+
+        return $line;
+    }
+
+    /**
+     * --detail：逐条打印配置扫描根的展开结果与实际命中数（诊断「声明了但没扫到」）。
+     */
+    protected function printScanRoots(): void
+    {
+        try {
+            $roots = DbCheckRegistry::scanRoots();
+        } catch (\Throwable $e) {
+            $this->warn('扫描根展开失败: ' . $e->getMessage());
+
+            return;
+        }
+
+        if ($roots === []) {
+            $this->line('扫描根: （config/dbcheck.php 未声明 scan）');
+
+            return;
+        }
+
+        foreach ($roots as $root) {
+            $this->line('扫描根: ' . $root['path'] . ' (' . $root['namespace'] . ') → '
+                . ($root['matched'] ? '命中 ' . $root['count'] . ' 个' : '未匹配（目录不存在）'));
+        }
     }
 
     /**
@@ -591,7 +748,7 @@ class CheckInfoCommand extends Command
     /**
      * 将 pretend 返回的查询（字符串或 ['query'=>..., 'bindings'=>...]）格式化为可读 SQL。
      *
-     * 绑定值内联到语句中，再按关键字边界换行排版（见 prettySql）。
+     * 绑定值内联到语句中（只替换字符串字面量外的 ?），再按关键字边界换行排版（见 prettySql）。
      *
      * @param string|array<int, mixed> $entry
      */
@@ -603,23 +760,64 @@ class CheckInfoCommand extends Command
 
         $query = (string) ($entry['query'] ?? '');
         $bindings = (array) ($entry['bindings'] ?? []);
+
+        return $this->prettySql($this->inlineBindings($query, $bindings));
+    }
+
+    /**
+     * 内联绑定值：只替换单引号字符串字面量**之外**的 ?（字面量内的 ? 原样保留，
+     * 否则 `default '?'` 这类默认值会被错误替换成 NULL）。
+     *
+     * @param array<int, mixed> $bindings
+     */
+    protected function inlineBindings(string $query, array $bindings): string
+    {
+        $out = '';
         $index = 0;
-        $query = preg_replace_callback('/\?/', function () use (&$index, $bindings) {
-            $value = $bindings[$index++] ?? null;
-            if ($value === null) {
-                return 'NULL';
-            }
-            if (is_numeric($value)) {
-                return (string) $value;
-            }
-            if (is_bool($value)) {
-                return $value ? '1' : '0';
-            }
+        $length = strlen($query);
+        $inQuote = false;
 
-            return "'" . str_replace("'", "''", (string) $value) . "'";
-        }, $query);
+        for ($i = 0; $i < $length; $i++) {
+            $char = $query[$i];
+            if ($char === "'") {
+                // '' 是字面量内的转义引号：原样拷贝两个字符
+                if ($inQuote && $i + 1 < $length && $query[$i + 1] === "'") {
+                    $out .= "''";
+                    $i++;
+                    continue;
+                }
+                $inQuote = !$inQuote;
+                $out .= $char;
+                continue;
+            }
+            if ($char === '?' && !$inQuote) {
+                $out .= $this->inlineValue($bindings[$index++] ?? null);
+                continue;
+            }
+            $out .= $char;
+        }
 
-        return $this->prettySql($query);
+        return $out;
+    }
+
+    /**
+     * 绑定值的 SQL 字面量表示。
+     *
+     * @param mixed $value
+     */
+    protected function inlineValue($value): string
+    {
+        if ($value === null) {
+            return 'NULL';
+        }
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+        if (is_numeric($value)) {
+            return (string) $value;
+        }
+
+        return "'" . str_replace("'", "''", (string) $value) . "'";
     }
 
     /**
@@ -630,22 +828,24 @@ class CheckInfoCommand extends Command
      * - update / delete：set / where 换行；
      * - create table：列定义逐行（对齐 SHOW CREATE TABLE 风格）。
      *
-     * 单引号字符串字面量内不做任何处理。
+     * 单引号字符串字面量内不做任何处理（含空白压缩）：预览展示的值必须与真实写入一致。
      */
     protected function prettySql(string $sql): string
     {
-        $sql = trim(preg_replace('/\s+/', ' ', $sql));
+        $trimmed = trim($sql);
 
         // set/where 规则只作用于对应语句类型（避免 create table 的 character set 被误换行）
-        $isUpdate = preg_match('/^update\s/i', $sql) === 1;
-        $isDelete = preg_match('/^delete\s/i', $sql) === 1;
+        $isUpdate = preg_match('/^update\s/i', $trimmed) === 1;
+        $isDelete = preg_match('/^delete\s/i', $trimmed) === 1;
 
-        // 按单引号字符串切片（'' 为字面内引号转义，配对切分即可），规则只作用于非字符串片段
+        // 先按单引号字符串切片（'' 为字面内引号转义，配对切分即可），规则只作用于非字符串片段；
+        // 空白压缩也在非字符串片段内做，字面量里的多个空格/换行原样保留。
         $parts = preg_split("/('(?:[^']|'')*')/", $sql, -1, PREG_SPLIT_DELIM_CAPTURE);
         foreach ($parts as $i => $part) {
             if ($i % 2 === 1) {
                 continue;
             }
+            $part = preg_replace('/\s+/', ' ', $part);
             $part = preg_replace('/,\s*(add\s|drop\s|modify\s|change\s|rename\s)/i', ",\n  $1", $part);
             $part = preg_replace('/\s+values\s*\(/i', " values\n  (", $part);
             $part = str_replace('), (', "),\n  (", $part);
@@ -657,7 +857,7 @@ class CheckInfoCommand extends Command
             }
             $parts[$i] = $part;
         }
-        $sql = implode('', $parts);
+        $sql = trim(implode('', $parts));
 
         if (preg_match('/^create\s+table\s/i', $sql)) {
             $sql = $this->prettyCreateTable($sql);

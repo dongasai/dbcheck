@@ -14,6 +14,9 @@
         "illuminate/config": "^8.0 || ^9.0 || ^10.0 || ^11.0 || ^12.0",
         "phpunit/phpunit": "^9.6"
     },
+    "suggest": {
+        "doctrine/dbal": "在 Laravel 8 / 9 等未内置原生列修改的版本上，修复已有列（column.* 整列重写，底层 Blueprint::change()）需要安装 doctrine/dbal；较新的 Laravel 已内置原生列修改，无需安装"
+    },
     "autoload": {
         "psr-4": {
             "Dongasai\\Dbcheck\\": "src/"
@@ -25,7 +28,7 @@
         }
     },
     "scripts": {
-        "test": "phpunit"
+        "test": "phpunit --bootstrap tests/bootstrap.php tests"
     },
     "extra": {
         "laravel": {

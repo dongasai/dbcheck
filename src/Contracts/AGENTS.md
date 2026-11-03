@@ -18,7 +18,7 @@
   - `type`：column / index / extra_column / extra_index / table / data / field / item
   - `message`：问题描述；`optional`：是否可选处理项（额外列/索引，默认不处理）；`repair`：修复方式展示文案
 - **fix($key) 只认 check() 产出的 key**，未知 key 抛 LogicException。
-- **preview($key)**：连接层 pretend 模式返回将执行的写 SQL（已内联绑定值），不落库。
+- **preview($key)**：连接层 pretend 模式返回将执行的语句数组（每项 `['query'=>string,'bindings'=>array]`），已由 `Support/PreviewContext::writeStatements()` 过滤掉判重/元数据读，只保留写 SQL；绑定值未内联（命令侧 formatSql 内联并排版）。pretend 期间 SELECT 恒返回空，故实现方须在 pretend 前预热 fix() 依赖的读（见 Support/PreviewContext）。
 - 直接实现 DbCheckInterface 却不继承三个抽象基类之一 → `DbCheckRegistry::grouped()` 抛 LogicException（通常漏写 extends）。
 - TableSchemaProvider 是一张表「当前应有完整结构」的唯一声明处，由 AbstractTableCheck 实现（不存在建表，存在比对并修复差异）。
 

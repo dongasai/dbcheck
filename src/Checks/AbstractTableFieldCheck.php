@@ -3,6 +3,8 @@
 namespace Dongasai\Dbcheck\Checks;
 
 use Dongasai\Dbcheck\Contracts\DbCheckInterface;
+use Dongasai\Dbcheck\Support\DatabaseCompat;
+use Dongasai\Dbcheck\Support\PreviewContext;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use LogicException;
@@ -105,7 +107,8 @@ abstract class AbstractTableFieldCheck implements DbCheckInterface
             }
 
             foreach ((array) ($def['columns'] ?? []) as $col => $expected) {
-                $actualVal = $row->{$col};
+                // 列不存在时取 null 兜底：不抛 PHP Warning，交由标量比较报差异（或声明 null 时通过）
+                $actualVal = $row->{$col} ?? null;
 
                 if (is_array($expected)) {
                     $stored = static::indexStoredItems($actualVal);
@@ -153,10 +156,13 @@ abstract class AbstractTableFieldCheck implements DbCheckInterface
             if ($def === null) {
                 throw new LogicException('未知行: ' . $rowKey);
             }
-            if (!isset($def['columns'][$col]) || is_array($def['columns'][$col])) {
-                throw new LogicException('列 ' . $col . ' 非标量或已声明');
+            // 用 array_key_exists 而非 isset：声明值为 null（锁定字段必须为空）是合法声明，
+            // isset 会把 null 判成「未声明」直接抛错，导致该字段永远修不好
+            $columns = (array) ($def['columns'] ?? []);
+            if (!array_key_exists($col, $columns) || is_array($columns[$col])) {
+                throw new LogicException('列 ' . $col . ' 未声明为标量');
             }
-            $expected = $def['columns'][$col];
+            $expected = $columns[$col];
             $data = [$col => $expected] + static::touchedAt();
             DB::connection($conn)->table($table)->where((array) ($def['where'] ?? []))->update($data);
 
@@ -184,7 +190,9 @@ abstract class AbstractTableFieldCheck implements DbCheckInterface
                 throw new LogicException('行不存在');
             }
 
-            $stored = is_string($row->{$col}) ? json_decode($row->{$col}, true) : $row->{$col};
+            // 列不存在时取 null 兜底：与 check() 同口径，不抛 PHP Warning（列缺失由表结构检查报项）
+            $rawStored = $row->{$col} ?? null;
+            $stored = is_string($rawStored) ? json_decode($rawStored, true) : $rawStored;
             $stored = is_array($stored) ? $stored : [];
 
             if (array_key_exists($itemKey, static::indexStoredItems($stored))) {
@@ -212,24 +220,48 @@ abstract class AbstractTableFieldCheck implements DbCheckInterface
     /**
      * 预览更新 SQL（pretend 模式，不落库）。
      *
-     * @return array<int, string>
+     * pretend 期间 SELECT 返回空：先预热行与 updated_at 列存在性，
+     * 否则 item.* 预览会误抛「行不存在」、field/item 预览会漏写 updated_at。
+     *
+     * @return array<int, array{query: string, bindings: array<int, mixed>}> 将要执行的写 SQL（已过滤元数据读）
      */
     public static function preview(string $key): array
     {
-        return DB::connection(static::connectionName())->pretend(function () use ($key) {
-            static::fix($key);
-        });
+        PreviewContext::begin();
+        try {
+            $parts = explode('.', $key, 3);
+            $def = (isset($parts[1]) && $parts[1] !== '') ? (static::rows()[$parts[1]] ?? null) : null;
+            if ($def !== null) {
+                static::findRow((array) ($def['where'] ?? []));
+                static::touchedAt();
+            }
+
+            return PreviewContext::writeStatements(DB::connection(static::connectionName())->pretend(function () use ($key) {
+                static::fix($key);
+            }));
+        } finally {
+            PreviewContext::end();
+            // 预览抛错时 Laravel 8 的 pretend() 不会复位 pretending，必须兜底（否则后续写全部静默跳过）
+            DatabaseCompat::stopPretending(static::connectionName());
+        }
     }
 
     /**
-     * 按 where 取首行。
+     * 按 where 取首行（预览上下文内命中缓存，避免 pretend 下读到空行）。
      *
      * @param array<string, mixed> $where
      * @return object|null
      */
     protected static function findRow(array $where)
     {
-        return DB::connection(static::connectionName())->table(static::table())->where($where)->first();
+        $conn = static::connectionName();
+
+        return PreviewContext::remember(
+            'row.' . ($conn ?? 'default') . '.' . static::table() . '.' . json_encode($where),
+            function () use ($where, $conn) {
+                return DB::connection($conn)->table(static::table())->where($where)->first();
+            }
+        );
     }
 
     /**
@@ -309,7 +341,13 @@ abstract class AbstractTableFieldCheck implements DbCheckInterface
      */
     protected static function touchedAt(): array
     {
-        if (!Schema::connection(static::connectionName())->hasColumn(static::table(), 'updated_at')) {
+        $hasUpdatedAt = PreviewContext::remember(
+            'hasColumn.' . (static::connectionName() ?? 'default') . '.' . static::table() . '.updated_at',
+            function () {
+                return Schema::connection(static::connectionName())->hasColumn(static::table(), 'updated_at');
+            }
+        );
+        if (!$hasUpdatedAt) {
             return [];
         }
 

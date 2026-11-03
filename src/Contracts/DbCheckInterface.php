@@ -40,7 +40,10 @@ interface DbCheckInterface
     /**
      * 预览修复将要执行的 SQL（使用连接层 pretend 模式，不落库）。
      *
-     * @return array<int, string> 将要执行的 SQL 语句（仅写操作，已内联绑定值）
+     * 返回 pretend 记录的语句数组（每项 ['query' => string, 'bindings' => array]），
+     * 已过滤掉 fix() 内部的判重/元数据读语句，只保留写操作（绑定值未内联，由命令侧排版）。
+     *
+     * @return array<int, array{query: string, bindings: array<int, mixed>}>
      */
     public static function preview(string $key): array;
 }

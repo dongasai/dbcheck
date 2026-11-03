@@ -8,15 +8,20 @@
 
 | 基类 | 检查 | fix 方式 | 行数 |
 |------|------|---------|------|
-| AbstractTableCheck.php | 表不存在 → 报 table 缺失项；存在 → 表编码（声明制）与列/索引和最终结构比对（额外列/索引为可选项） | 缺失按声明建表（列可 `'primary' => true`，charset()/collation() 覆盖连接默认）；编码不一致 `CONVERT TO CHARACTER SET`；ADD/CHANGE COLUMN、ADD/同名重建 INDEX；额外项确认后 DROP | 482 |
-| AbstractTableDataCheck.php | 必需数据行是否存在（先 hasTable()，缺表返回空）；可选删除验证 deleteExtra() 报未声明的多余行 | where+insert+insertMerge()；数组值入库前 json_encode；`timestamps => false` 时不写时间列；`data.extra.*` 按身份 JSON 删多余行 | 383 |
-| AbstractTableFieldCheck.php | 声明字段标量值 / JSON 数组项齐全性（先 hasTable()，缺表返回空） | 回写标量；只补缺失数组项（已存项与运行期状态保留）；list/map 两种声明都支持 | 336 |
+| AbstractTableCheck.php | 表不存在 → 报 table 缺失项；存在 → 表编码（声明制）与列/索引和最终结构比对（额外列/索引为可选项） | 缺失按声明建表（列可 `'primary' => true`，charset()/collation() 覆盖连接默认）；编码不一致 `CONVERT TO CHARACTER SET`；ADD/CHANGE COLUMN、ADD/同名重建 INDEX；额外项确认后 DROP | 608 |
+| AbstractTableDataCheck.php | 必需数据行是否存在（先 hasTable()，缺表返回空）；可选删除验证 deleteExtra() 报未声明的多余行 | 已存在则短路；where+insert+insertMerge()；数组值入库前 json_encode；`timestamps => false` 时不写时间列；`data.extra.*` 按身份 JSON 删多余行 | 419 |
+| AbstractTableFieldCheck.php | 声明字段标量值 / JSON 数组项齐全性（先 hasTable()，缺表返回空） | 回写标量；只补缺失数组项（已存项与运行期状态保留）；list/map 两种声明都支持 | 374 |
 
 ## 要点
 
 - **TableCheck 是结构声明与工具的唯一承载者**：实现 TableSchemaProvider（table/columns/indexes 全量声明），hasTable、createTable、information_schema 读取（经适配器）、差异计算与修复一体——不存在「存在/行差异拆两个类」的旧模型。
 - **表编码是声明制**：可选覆盖 `charset()` / `collation()`（默认 null = 用连接默认且**不比对**）；任一声明后读实际表编码（适配器 actualTableCharset）比对，不一致报 `table.charset`；修复 = `ALTER TABLE ... CONVERT TO`（CONVERT 会连带转换已有数据字符集，且可能把 TEXT 类列升级类型——如 utf8mb3 下 mediumtext→longtext，修回类型交给 column.* 项）。PG 驱动不支持读表编码，自动跳过。
 - 表缺失时 check() 只报一项 `table` 缺失（修复=建表），不重复报列/索引差异。
+- **列属性差异聚合**：同一列的「类型 / 可空 / 默认值」差异聚合成**一个** `column.<名>` 异常项（message 列出全部差异，repair=整列重写）——一次报全、一次修好，不再逐属性 continue 导致要跑多轮才全绿。
+- **未知驱动降级**：`AdapterFactory::make()` 抛 InvalidArgumentException（DM / SQLServer 等无适配器）时，check() 不整体失败、返回空（表存在即通过；缺表仍报 `table` 项），精确比对跳过；命令层对每个表结构检查器调用 `hasAdapter()` 逐个 warn「表结构检查已降级」（按各自 connectionName() 判定，不按默认连接统一判定）。
+- **列声明统一校验**：check() 在进入比对前对全部声明列调用适配器 `expectedColumnType()`——缺 `type` / 未知 type 当场抛 LogicException，与驱动比对深度无关（否则 PG/SQLite 只做存在性比对时，错误声明会表现为「列不存在」且 fix 必抛，永远修不好）。
+- **索引声明校验**：check()/fix()/createTable() 统一经 `declaredIndexes()` 归一化——`indexes()` 必须是「索引名 => [columns, unique]」映射；整数下标（旧 list + name 形态）、内层只有 name 没 columns、或 `columns` 不是非空字符串数组（如裸列数组 `['uk' => ['col']]`）时抛 LogicException，防止建出名为 "0" 的索引或 `create index ... ()` 的非法 SQL（该表会永远报缺失、永远修不好）。
+- **预览必须与真实修复同口径**：`preview($key)` 先 `PreviewContext::begin()`，在 pretend **之前**经 `readActualColumns()` / `readActualIndexes()` / `rowExists()` / `findRow()` / `touchedAt()` 预热 fix() 依赖的读，pretend 内命中缓存；最后 `PreviewContext::writeStatements()` 过滤掉判重/元数据 SELECT。不预热会把「改列」预览成「加列」、索引漏 drop、`item.*` 预览误抛「行不存在」、已存在行预览误出 INSERT、预览漏写 updated_at。pretend 内抛错时 `finally` 还会经 `DatabaseCompat::stopPretending()` 复位 pretending（Laravel 8 的 `pretend()` 无 try/finally，不复位会让后续写全部静默跳过）。
 - 异常项 key：`table` / `table.charset` / `column.<名>` / `index.<名>` / `extra_column.<名>` / `extra_index.<名>` / `data.extra.<身份JSON>`；fix() 对未知 key 抛 LogicException（仅声明 collation() 未声明 charset() 时 fix table.charset 抛 LogicException——CONVERT 必须带字符集；未启用 deleteExtra() 时 fix data.extra.* 抛 LogicException）。
 - DataCheck：insert 仅是**新增时的默认值**，已有行字段不比对不回写（后台可自由调整）；需锁定的字段去 FieldCheck 显式声明。钩子 `rowIssues($key,$def,$row)` 承载声明表达不了的附加校验（覆盖时需自行覆盖 fix()）；**仅在该行存在时调用**（行不存在时由缺行项覆盖、body 传 null 会让 `object` 类型签名报错）。
 - **缺表守卫**：Data / Field 的 `check()` 先 `hasTable()`，表不存在直接返回空——缺表由 TableCheck 报一项，避免这里 SELECT 抛 QueryException、也不重复报错。
@@ -29,10 +34,10 @@
 
 ## 关键方法（行号）
 
-- TableCheck：charset()/collation():58/68 · check():113 · indexEquivalent():313 · fix():336 · preview():442 · createTable():452
-- DataCheck：group():44 · deleteExtra():79 · hasTable():103 · check():113 · fix():162 · preview():204 · applyInsertMerge():218 · extraRowIssues():268 · rowMatchesDeclaration():319 · deleteExtraRow():350
-- FieldCheck：hasTable():81 · check():91 · fix():145 · preview():217 · declaredItems():245 · indexStoredItems():273 · isListArray():300 · touchedAt():310
+- TableCheck：charset()/collation():61/71 · check():136 · hasAdapter():118 · indexEquivalent():346 · fix():369 · preview():477 · readActualColumns():510 · readActualIndexes():522 · declaredIndexes():537 · createTable():578
+- DataCheck：group():46 · deleteExtra():81 · hasTable():105 · check():115 · fix():164 · preview():213 · applyInsertMerge():247 · rowExists():272 · findRow():283 · extraRowIssues():304 · rowMatchesDeclaration():355 · deleteExtraRow():386
+- FieldCheck：hasTable():83 · check():93 · fix():148 · preview():228 · findRow():255 · declaredItems():277 · indexStoredItems():305 · isListArray():332 · touchedAt():342
 
 ## 依赖
 
-- 上游：Contracts/ 契约、Support/ColumnType 常量；下游：Adapters/AdapterFactory（建列与比对深度）。
+- 上游：Contracts/ 契约、Support/ColumnType 常量、Support/PreviewContext（预览缓存）；下游：Adapters/AdapterFactory（建列与比对深度）。

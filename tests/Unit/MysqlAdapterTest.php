@@ -115,4 +115,21 @@ class MysqlAdapterTest extends TestCase
     {
         $this->assertSame('mysql', $this->adapter->driverLabel());
     }
+
+    /**
+     * 缺 type 键必须显式报错，不能静默回落 string（否则漏写/拼错的声明会静默建出 varchar）。
+     */
+    public function testMissingTypeThrowsLogicException(): void
+    {
+        $this->expectException(\LogicException::class);
+
+        $this->adapter->expectedColumnType(['length' => 10]);
+    }
+
+    public function testUnknownTypeThrowsLogicException(): void
+    {
+        $this->expectException(\LogicException::class);
+
+        $this->adapter->expectedColumnType(['type' => 'not_a_column_type']);
+    }
 }
