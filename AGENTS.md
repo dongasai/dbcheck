@@ -4,7 +4,7 @@
 >
 > 包类型 `library` · PHP >=7.4 · illuminate 8–13 · 经 composer extra.laravel.providers 自动发现（doctrine/dbal 已从 require 移除：包源码零使用；Laravel 8/9 修改已有列仍需宿主装 dbal——已在 composer `suggest` 声明，较新 Laravel 原生 `change()` 无需）
 
-_初始化：2026-11-01 00:56 · 最近全量校对：2026-11-03（补审计缺口：发现计数/选择器零命中、`--strict`、预览预热 PreviewContext、pretend 异常复位、缺 type/索引声明校验、预览 SQL 字面量保真、测试补齐后）_
+_初始化：2026-11-01 00:56 · 最近全量校对：2026-11-03（补审计缺口：发现计数/选择器零命中、`--strict`、预览预热 PreviewContext、pretend 异常复位、缺 type/索引声明校验、预览 SQL 字面量保真、测试补齐后；新增 `dbcheck:info` 版本与分组统计）_
 
 ## 架构总览
 
@@ -14,6 +14,7 @@ flowchart TD
         CHECK["dbcheck:check 自检 + 修复"]
         DELETE["dbcheck:delete 多余行清理"]
         SEED["dbcheck:seed 播种数据"]
+        INFO["dbcheck:info 版本与分组统计"]
         INIT["dbcheck:init 发布配置"]
         SKILL["dbcheck:skill 注册 agent skill"]
     end
@@ -41,6 +42,7 @@ flowchart TD
     COMPAT["DatabaseCompat 驱动类型 + 兼容插入"]
 
     CHECK --> REG
+    INFO -- 版本 + 分组统计 --> REG
     DELETE -- deleteExtra 能力收集 --> DATA
     SEED -- seeder 分组收集 --> DATA & FIELD
     REG --> TABLE & DATA & FIELD
@@ -91,7 +93,7 @@ flowchart TD
 | src/Checks/ | [AGENTS.md](src/Checks/AGENTS.md) | 三类检查抽象基类（核心） |
 | src/Adapters/ | [AGENTS.md](src/Adapters/AGENTS.md) | 数据库类型判断（DbDriver）+ MySQL/MySQL8/PG/SQLite 驱动适配 |
 | src/Support/ | [AGENTS.md](src/Support/AGENTS.md) | 注册表（发现/分组/计数）+ 列类型常量 + 数据库兼容工具 + 预览上下文缓存（PreviewContext） |
-| src/Console/Commands/ | [AGENTS.md](src/Console/Commands/AGENTS.md) | 五条 artisan 命令（check / delete / seed / init / skill） |
+| src/Console/Commands/ | [AGENTS.md](src/Console/Commands/AGENTS.md) | 六条 artisan 命令（check / delete / seed / init / skill / info） |
 | resources/skill/dbcheck/ | —（SKILL.md 即指南） | agent 引导 skill，经 dbcheck:skill 注册到宿主项目 |
 
 ## 全局规范
@@ -113,6 +115,6 @@ flowchart TD
 
 ## 测试与已知缺口
 
-- **tests/ 已建**（2026-11-01 并入并补齐；2026-11-03 补审计缺口用例与选择器零命中保护）：Unit 8 只（ColumnType / DbCheckRegistry / DbDriver / TableCheckLogic / MysqlAdapter / FieldCheckLogic / PreviewContext / PreviewSqlFormatting）+ Integration 6 只（SQLite 全链：建表比对修复 / 固定数据 / **删除验证** / 字段明细 / **播种分组** / **命令级 CheckInfoCommand**）+ Fixtures 16 只，**149 用例全绿**。运行：`composer test`，或 `phpunit --bootstrap tests/bootstrap.php tests`（需 standalone vendor——require-dev 含 phpunit 与 illuminate/config；data provider 已改静态写法，phpunit 9.6/11 通用）。phpstudy 默认未开 pdo_sqlite 时用 `php -d extension=pdo_sqlite vendor/bin/phpunit --bootstrap tests/bootstrap.php tests`。
+- **tests/ 已建**（2026-11-01 并入并补齐；2026-11-03 补审计缺口用例与选择器零命中保护、新增 dbcheck:info 用例）：Unit 8 只（ColumnType / DbCheckRegistry / DbDriver / TableCheckLogic / MysqlAdapter / FieldCheckLogic / PreviewContext / PreviewSqlFormatting）+ Integration 7 只（SQLite 全链：建表比对修复 / 固定数据 / **删除验证** / 字段明细 / **播种分组** / **命令级 CheckInfoCommand** / **命令级 DbcheckInfoCommand**）+ Fixtures 16 只，**153 用例全绿**。运行：`composer test`，或 `phpunit --bootstrap tests/bootstrap.php tests`（需 standalone vendor——require-dev 含 phpunit 与 illuminate/config；data provider 已改静态写法，phpunit 9.6/11 通用）。phpstudy 默认未开 pdo_sqlite 时用 `php -d extension=pdo_sqlite vendor/bin/phpunit --bootstrap tests/bootstrap.php tests`。
 - **宿主全框架 vendor 下跑测**：TestCase 已绑 `db.schema`（全套 Laravel 才有的绑定），最小容器可直接跑全绿；autoload-dev 的 Tests 命名空间在宿主 vendor 需 dump-autoload 刷新或测试引导手动补映射。
 - 仍无测试覆盖：CheckInfoCommand 交互确认分支（fixIssue 问答，非交互主链路已被 CheckInfoCommandTest 覆盖）、`--check=db`/`--db-write`/`--fix-flow`/`--connection`/`--adapter` 的命令级用例、MySQL 真实库精确比对与「已存在列 modify」预览（本机测试走 SQLite + FakeAttributeAdapter 模拟）、PgsqlAdapter 真实库路径、未知驱动降级提示（需构造无驱动的自定义连接）。

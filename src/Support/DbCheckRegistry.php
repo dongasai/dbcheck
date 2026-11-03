@@ -206,6 +206,82 @@ class DbCheckRegistry
     }
 
     /**
+     * 按「分组 × 检查器类型」统计数量（dbcheck:info 展示用；不抛异常）。
+     *
+     * 一次遍历 all()，用 groupOf() 取分组（null = 常规），按继承的抽象基类
+     * 分类为 table / data / field；直接实现 DbCheckInterface 却未继承任一抽象基类的
+     * 类计入 unknown——与 counts() 同口径，统计只用于展示，不能让诊断信息本身崩栈。
+     *
+     * 顺序：常规（group=null）固定第一，其余分组名按字典序（strcmp）升序。
+     *
+     * @return array<int, array{group: string|null, table: int, data: int, field: int, unknown: int, total: int}>
+     */
+    public static function groupCounts(): array
+    {
+        $regular = null;
+        $groups = [];
+
+        foreach (static::all() as $c) {
+            $group = static::groupOf($c);
+            if ($group === null) {
+                if ($regular === null) {
+                    $regular = [
+                        'group' => null,
+                        'table' => 0,
+                        'data' => 0,
+                        'field' => 0,
+                        'unknown' => 0,
+                        'total' => 0,
+                    ];
+                }
+                $bucket = &$regular;
+            } else {
+                if (!isset($groups[$group])) {
+                    $groups[$group] = [
+                        'group' => $group,
+                        'table' => 0,
+                        'data' => 0,
+                        'field' => 0,
+                        'unknown' => 0,
+                        'total' => 0,
+                    ];
+                }
+                $bucket = &$groups[$group];
+            }
+
+            $ref = new \ReflectionClass($c);
+
+            if ($ref->isSubclassOf(AbstractTableCheck::class)) {
+                $bucket['table']++;
+            } elseif ($ref->isSubclassOf(AbstractTableDataCheck::class)) {
+                $bucket['data']++;
+            } elseif ($ref->isSubclassOf(AbstractTableFieldCheck::class)) {
+                $bucket['field']++;
+            } else {
+                $bucket['unknown']++;
+            }
+            $bucket['total']++;
+
+            unset($bucket);
+        }
+
+        $names = array_keys($groups);
+        usort($names, function ($a, $b) {
+            return strcmp($a, $b);
+        });
+
+        $out = [];
+        if ($regular !== null) {
+            $out[] = $regular;
+        }
+        foreach ($names as $name) {
+            $out[] = $groups[$name];
+        }
+
+        return $out;
+    }
+
+    /**
      * 诊断用：逐条报告配置扫描根的展开与命中情况。
      *
      * 复用 expandRoot()（通配根展开为多条具体根）与 scanRoot()（递归扫描类名）：

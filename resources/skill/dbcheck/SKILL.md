@@ -222,6 +222,7 @@ php artisan dbcheck:check --adapter=mysql57   # 5.7 等无原生 JSON 的旧版�
 
 ```bash
 php artisan dbcheck:init                        # 把包内配置发布到项目 config/dbcheck.php
+php artisan dbcheck:info                        # 版本与已注册检查器分组统计（不连接数据库、不执行检查）
 php artisan dbcheck:check                       # 交互：先看 SQL 再确认修复
 php artisan dbcheck:check --no-interaction      # 只报告，零变更（全部为可选处理项时退出码 0，加 --strict 则按失败返回）
 php artisan dbcheck:check --no-interaction --strict  # 非交互下把额外列/额外索引也判为失败（严格口径）

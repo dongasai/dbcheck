@@ -1,11 +1,12 @@
 📍 [dbcheck](../../../AGENTS.md) / Console / **Commands**
 
-# Artisan 命令（五条，仅控制台环境注册）
+# Artisan 命令（六条，仅控制台环境注册）
 
 | 命令 | 类 | 用途 |
 |------|-----|------|
 | dbcheck:check | CheckInfoCommand | 主命令：自检 + 交互修复。`--check=fields\|db\|all`（逗号组合；fields 默认）；`--no-interaction` 只报告不变更（可选处理项全部命中时返回 SUCCESS；未执行任何检查/有必修复项时 FAILURE）；`--strict` 非交互模式下可选处理项（额外列/额外索引）也按失败返回；`--group=<名>` 只执行该分组（即「播种测试数据」）；`--all-groups` 全部分组；`--connection=<名>` 切换默认连接（未显式声明 connectionName() 的检查器随之切换，默认 database.default）；`--adapter=<别名\|类名>` 运行期覆盖驱动选择（默认由 DbDriver 按库类型检查判断）；`--fix-flow=batch\|inline` 修复节奏（默认 batch=先全量报告后逐条修复；inline=边查边修，仅交互模式生效）；`--detail` 数据库检查打印连接参数 + 结构检查打印扫描根命中情况；`--db-write` 数据库检查追加临时表读写自检（默认只读） |
 | dbcheck:delete | DbcheckDeleteCommand | 删除验证专用入口：清理开启 `deleteExtra()` 的 DataCheck 中未声明的多余数据行（`data.extra.*`）。`--yes` 免确认直接删除；`--no-interaction` 只报告零变更；`--connection=` / `--adapter=` 语义同主命令；缺行（`data.*`）不归本命令 |
+| dbcheck:info | DbcheckInfoCommand | 只读诊断：包 / PHP / Laravel 版本 + 已注册检查器总数与按「分组 × 类型」的分组统计表；不连接数据库、不执行任何检查 |
 | dbcheck:seed | DbcheckSeedCommand | 播种专用入口：执行声明 `group()=SEEDER` 的 DataCheck / FieldCheck，缺行补插（`data.*`）+ 字段回写（`field.*` / `item.*`）。`--group=<名>` 改收任意自定义分组（默认 `DbCheckGroup::SEEDER`）；`--yes` 免确认直接执行；`--no-interaction` 只报告零变更；多余行（`data.extra.*`）与表结构差异不归本命令 |
 | dbcheck:init | DbcheckInitCommand | 发布包内默认配置到项目 config/dbcheck.php（`--force` 覆盖）；等价 `vendor:publish --tag=dbcheck-config` |
 | dbcheck:skill | DbcheckSkillCommand | 把 resources/skill/dbcheck 注册到项目已有 agent skill 目录 |
@@ -38,6 +39,14 @@ Registry::grouped() 三类定序（表结构 → 固定数据 → 字段明细�
 - `--db-write`：追加临时表读写自检（建表 → 插/查/改/删 → 必定 drop，表名 `dbcheck_probe_<随机>`）。
 - 退出码与结构检查合并：任一失败即 FAILURE。
 
+## dbcheck:info 细节
+
+- 输出：`dbcheck <版本>`、`PHP <PHP_VERSION>`、`Laravel <框架版本>`（能探测到才输出）→ 空行 → `检查器: 共 N 个（表结构 a / 固定数据 b / 字段明细 c[/ 未归类 d]）` → 空行 → 分组统计表（列：分组 / 表结构 / 固定数据 / 字段明细 / 未归类 / 合计；常规行显示「常规」，其余显示分组名，常规第一、其余按字典序）。
+- **只读诊断**：不连接数据库、不执行任何检查（不调 check()/preview()/fix()）。
+- **0 个检查器仍返回 SUCCESS**：只 warn「未发现任何检查器：请检查 config/dbcheck.php 的 scan 根与类命名空间」——「0 检查器算失败」的口径只属于 dbcheck:check。
+- 注册表发现异常（counts()/groupCounts() 抛错）→ `error('检查器发现失败: ...')` 并返回 FAILURE，不崩栈。
+- 版本探测：`Composer\InstalledVersions::isInstalled('dongasai/dbcheck')` + `getPrettyVersion()`（tag 安装直接命中）→ 若为 dev 版本（dev-main / 1.0.x-dev）则依次回落包根 `composer.json` 的 `version`、`git describe --tags` 最近 tag（源码开发态；无 .git / git 不可用 / 无 tag 时跳过）→ 仍无则显示 dev 版本或 `unknown（未通过 Composer 安装）`；框架版本：`app()->version()` → `laravel/framework` / `illuminate/support`；全部 try/catch，取不到就不输出框架行。
+
 ## dbcheck:delete 细节
 
 - **按「能力」收集**：`DbCheckRegistry::grouped(null, true)['data']` 过滤 `deleteExtra() === true` 的 DataCheck——不受分组过滤影响，无需 `--group=delete`。
@@ -67,4 +76,4 @@ DbcheckServiceProvider::boot() 中 runningInConsole() 时注册。
 
 ## 测试
 
-`tests/Integration/CheckInfoCommandTest.php` 用 Symfony Console 直接驱动 `dbcheck:check`（容器复用 TestCase 最小容器），覆盖：0 检查器 FAILURE、发现计数/分组行、`--group` 零命中 FAILURE、多个 `--group` 部分拼错 FAILURE、有效 `--group`/`--all-groups` 正向路径、默认集合全为空 warn + FAILURE、可选处理项 SUCCESS 与 `--strict` FAILURE、必修复项 FAILURE + 建表预览、索引不一致预览含 drop+create、未归类类归类失败不崩栈、`--detail` 扫描根输出（含未声明与命中两种分支）。交互确认分支（fixIssue 问答）仍靠人工冒烟。
+`tests/Integration/CheckInfoCommandTest.php` 用 Symfony Console 直接驱动 `dbcheck:check`（容器复用 TestCase 最小容器），覆盖：0 检查器 FAILURE、发现计数/分组行、`--group` 零命中 FAILURE、多个 `--group` 部分拼错 FAILURE、有效 `--group`/`--all-groups` 正向路径、默认集合全为空 warn + FAILURE、可选处理项 SUCCESS 与 `--strict` FAILURE、必修复项 FAILURE + 建表预览、索引不一致预览含 drop+create、未归类类归类失败不崩栈、`--detail` 扫描根输出（含未声明与命中两种分支）。`tests/Integration/DbcheckInfoCommandTest.php` 覆盖 dbcheck:info：0 检查器 SUCCESS + 告警、计数行与分组统计表内容、版本行/框架行存在性（不断言具体版本号）。交互确认分支（fixIssue 问答）仍靠人工冒烟。

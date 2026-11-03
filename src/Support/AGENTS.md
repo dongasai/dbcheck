@@ -6,7 +6,7 @@
 
 | 文件 | 职责 |
 |------|------|
-| DbCheckRegistry.php | 检查器注册表：自动发现（扫描根支持 `*` 匹配模式）+ 手动注册 + 过滤 + 分组 + 三类归类 + 发现计数 counts() + 扫描根诊断 scanRoots() |
+| DbCheckRegistry.php | 检查器注册表：自动发现（扫描根支持 `*` 匹配模式）+ 手动注册 + 过滤 + 分组 + 三类归类 + 发现计数 counts() + 分组×类型统计 groupCounts() + 扫描根诊断 scanRoots() |
 | ColumnType.php | 22 个列类型常量（ID / BIG_INTEGER / … / DECIMAL / ENUM），DEFAULT = STRING；ENUM 需配 `values` 键 |
 | DatabaseCompat.php | 数据库兼容工具：驱动类型判断（driver/is/isMySQL/isPostgreSQL/isSqlite/isDM/isSqlServer）+ adapterClass() + rowExists（判重读，预览上下文内命中缓存）+ insertIfMissing（先判重再插入，规避 PG 系 on conflict 无冲突目标不支持）+ stopPretending（预览异常后复位 pretending） |
 | DbCheckGroup.php | 框架标准分组常量：`DELETE = 'delete'`（启用 deleteExtra() 的检查器默认归入，危险动作不随默认扫执行）；业务分组名仍由检查器 group() 自行定义 |
@@ -19,6 +19,7 @@
 - **过滤**（all()）：类不存在 / 抽象类 / 未实现 DbCheckInterface / 静态 `$enabled=false` 均跳过；结果惰性缓存。
 - **分组**：groupOf() 读类静态 group()，空串视为常规（null）；groups() 汇总各分组数量；grouped($group,$all) 按继承基类归入 table/data/field 三组——**直接实现接口未继承基类 → LogicException**。
 - **发现计数** counts()：复用 all()，按继承基类统计 `['table'=>int,'data'=>int,'field'=>int,'unknown'=>int,'total'=>int]`；直接实现接口未继承基类的类计入 unknown（**不抛异常**——计数只用于展示，不能让诊断本身崩栈；与 grouped() 的 LogicException 口径不同）。命令侧据此打印「发现 N 个检查器」并在 total=0 时告警失败。
+- **分组×类型统计** groupCounts()：一次遍历 all()，用 groupOf() 取分组（null = 常规），按继承基类分类为 table/data/field，未继承基类的类计入 unknown（**不抛异常**，与 counts() 同口径）；返回 list `[['group'=>null|string,'table'=>int,'data'=>int,'field'=>int,'unknown'=>int,'total'=>int], ...]`，顺序为常规第一、其余分组名按字典序（strcmp）升序。供 `dbcheck:info` 展示分组统计表。
 - **扫描根诊断** scanRoots()：遍历 config('dbcheck.scan')，复用 expandRoot()/scanRoot()，返回 `[['path'=>string,'namespace'=>string,'matched'=>bool,'count'=>int], ...]`；通配模板根展开为多条，无匹配目录（或 path/namespace 未声明）的根报告一条 matched=false、count=0。**count 与 all() 同口径过滤**（抽象类/未实现接口/`$enabled=false`/非检查器类不计入），避免「命中 n 个」大于「发现 N 个检查器」误导诊断。命令 `--detail` 用它打印「扫描根: <path> (<namespace>) → 命中 n 个 / → 未匹配（目录不存在）」，定位「声明了但没扫到」。
 - **测试辅助** clear()：清空手动注册与发现缓存。
 - 返回值均为 class-string 数组；执行顺序约定 table → data → field。

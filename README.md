@@ -153,6 +153,7 @@ php artisan dbcheck:check                    # 交互：逐条预览 SQL → 确
 | `dbcheck:check` | 主命令：自检 + 交互修复（参数见下表） |
 | `dbcheck:seed` | 播种：执行声明 `group()=SEEDER` 的数据/字段检查器，缺行补插 + 字段回写；`--group=` 改收任意自定义分组 |
 | `dbcheck:delete` | 删除验证：清理开启 `deleteExtra()` 的检查器中未声明的多余数据行（逐条确认，`--yes` 免确认） |
+| `dbcheck:info` | 版本与注册检查器分组统计（包/PHP/Laravel 版本 + 分组 × 三类计数；不连接数据库、不执行检查） |
 | `dbcheck:init` | 发布包内默认配置到 config/dbcheck.php（`--force` 覆盖） |
 | `dbcheck:skill` | 把编写指南注册为 agent skill（交互多选目标目录） |
 
@@ -185,7 +186,7 @@ php artisan dbcheck:check                    # 交互：逐条预览 SQL → 确
 composer test        # = phpunit --bootstrap tests/bootstrap.php tests
 ```
 
-Unit 8 只（列类型/注册表/驱动判断/三类检查逻辑/预览上下文/预览 SQL 保真）+ Integration 6 只（SQLite 全链：建表比对修复、固定数据、删除验证、播种分组、字段明细、命令级退出码/预览），共 149 用例。
+Unit 8 只（列类型/注册表/驱动判断/三类检查逻辑/预览上下文/预览 SQL 保真）+ Integration 7 只（SQLite 全链：建表比对修复、固定数据、删除验证、播种分组、字段明细、命令级退出码/预览、info 版本与分组统计），共 153 用例。
 
 > 注意：tests/bootstrap.php 用 Capsule 起最小容器；在「全套 Laravel 宿主」的 vendor 下运行需先补 `db.schema` 容器绑定。
 

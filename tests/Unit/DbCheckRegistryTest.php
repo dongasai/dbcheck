@@ -5,6 +5,7 @@ namespace Dongasai\Dbcheck\Tests\Unit;
 use Dongasai\Dbcheck\Support\DbCheckRegistry;
 use Dongasai\Dbcheck\Tests\Fixtures\DemoDataCheck;
 use Dongasai\Dbcheck\Tests\Fixtures\DemoFieldCheck;
+use Dongasai\Dbcheck\Tests\Fixtures\DemoSeederDataCheck;
 use Dongasai\Dbcheck\Tests\Fixtures\DemoTableCheck;
 use Dongasai\Dbcheck\Tests\Fixtures\DirectCheck;
 use Dongasai\Dbcheck\Tests\Fixtures\DisabledTableCheck;
@@ -116,6 +117,46 @@ class DbCheckRegistryTest extends TestCase
         $this->assertSame(0, $counts['data']);
         $this->assertSame(0, $counts['field']);
         $this->assertSame(1, $counts['total']);
+    }
+
+    /**
+     * groupCounts() 按「分组 × 类型」统计：常规第一，其余分组按字典序；未继承基类的类计入 unknown。
+     */
+    public function testGroupCountsByGroupAndType(): void
+    {
+        DbCheckRegistry::register(DemoTableCheck::class);
+        DbCheckRegistry::register(DemoDataCheck::class);
+        DbCheckRegistry::register(DemoFieldCheck::class);
+        DbCheckRegistry::register(TestdataDataCheck::class);
+        DbCheckRegistry::register(DemoSeederDataCheck::class);
+        DbCheckRegistry::register(DirectCheck::class);
+
+        $this->assertSame([
+            [
+                'group' => null,
+                'table' => 1,
+                'data' => 1,
+                'field' => 1,
+                'unknown' => 1,
+                'total' => 4,
+            ],
+            [
+                'group' => 'seeder',
+                'table' => 0,
+                'data' => 1,
+                'field' => 0,
+                'unknown' => 0,
+                'total' => 1,
+            ],
+            [
+                'group' => 'testdata',
+                'table' => 0,
+                'data' => 1,
+                'field' => 0,
+                'unknown' => 0,
+                'total' => 1,
+            ],
+        ], DbCheckRegistry::groupCounts());
     }
 
     /**
